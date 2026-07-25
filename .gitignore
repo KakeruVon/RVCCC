@@ -1,0 +1,16 @@
+# Python virtual environments
+.venv/
+.linux_venv/
+
+# VS Code settings
+.vscode/
+vide.toml
+
+# ModelSim generated files
+work/
+cpu_cnn.cr.mti
+cpu_cnn.mpf
+vsim.wlf
+
+# NVboard generated files
+build/
