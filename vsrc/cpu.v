@@ -44,7 +44,6 @@ module cpu (
     wire [31:0] ALU_Result;
     wire [31:0] Mem_Read_Data;
     wire [31:0] Reg_Write_Data;
-    wire [31:0] Mem_LED_out;
 
     // Stage Register wires
     // IF_ID Stage
@@ -341,8 +340,7 @@ module cpu (
         .cnn_mem_addr(cnn_mem_addr),
         .cnn_mem_write_data(cnn_mem_write_data),
         .cnn_mem_read_data(cnn_mem_read_data),
-        .Mem_Read_Data(Mem_Read_Data),
-        .Mem_LED_out(Mem_LED_out)
+        .Mem_Read_Data(Mem_Read_Data)
     );
 
     MEM_WB_Reg m11 (
@@ -1237,7 +1235,33 @@ module EX_MEM_Reg (
 
 endmodule
 
-module Data_Memory (
+// ================================================================
+// Data_Memory - 4KB shared CPU/CNN data RAM
+//
+// The CPU needs a 32-bit word port while the CNN reads image bytes
+// from the last 1KB. To keep this synthesizable as block RAM in
+// Vivado, the 32-bit memory is split into four 8-bit byte lanes:
+//   data_b0 stores byte address 4*i + 0
+//   data_b1 stores byte address 4*i + 1
+//   data_b2 stores byte address 4*i + 2
+//   data_b3 stores byte address 4*i + 3
+//
+// The CPU accesses all four lanes at the same word address and the
+// outputs are concatenated back into one 32-bit word. The CNN uses
+// cnn_mem_addr[1:0] to select one byte lane and cnn_mem_addr[11:2]
+// as the lane word address. A same-word CPU/CNN conflict disables
+// the CNN port for that cycle, giving CPU accesses priority.
+// ================================================================
+module Data_Memory #(
+    parameter DATA_B0_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b0.mem",
+    parameter DATA_B1_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b1.mem",
+    parameter DATA_B2_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b2.mem",
+    parameter DATA_B3_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b3.mem",
+    parameter CNN_B0_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b0.mem",
+    parameter CNN_B1_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b1.mem",
+    parameter CNN_B2_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b2.mem",
+    parameter CNN_B3_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b3.mem"
+) (
     // Inputs
     input wire clk_50MHZ,
     input wire Mem_Write_EX_MEM,
@@ -1246,38 +1270,35 @@ module Data_Memory (
     input wire [31:0] Mem_Write_Data,
     input wire [31:0] Mem_Address,
 
-    // CNN data-memory port. cnn.mem is mapped to the last 1KB.
+    // CNN data-memory port. cnn.mem contents are mapped to the last 1KB.
     input wire cnn_mem_read_en,
     input wire cnn_mem_write_en,
     input wire [11:0] cnn_mem_addr,
     input wire [7:0] cnn_mem_write_data,
 
     // Outputs
-    output reg [7:0] cnn_mem_read_data,
-    output reg [31:0] Mem_Read_Data,
-    output [31:0] Mem_LED_out
+    output wire [7:0] cnn_mem_read_data,
+    output wire [31:0] Mem_Read_Data
 );
     //-------------------------------------------------------------
     // Registers / Wires
     //-------------------------------------------------------------
-    localparam DATA_MEM_BYTES = 4096;
-    localparam DATA_MEM_WORDS = 1024; // 4KB data memory
-    localparam CNN_INIT_BASE  = 3072;
-
-    (* ram_style = "block" *) reg [7:0] mem_b0 [0:DATA_MEM_WORDS-1];
-    (* ram_style = "block" *) reg [7:0] mem_b1 [0:DATA_MEM_WORDS-1];
-    (* ram_style = "block" *) reg [7:0] mem_b2 [0:DATA_MEM_WORDS-1];
-    (* ram_style = "block" *) reg [7:0] mem_b3 [0:DATA_MEM_WORDS-1];
-    reg [7:0] init_mem [0:DATA_MEM_BYTES-1];
-
     wire [9:0] cpu_word_addr;
     wire [9:0] cnn_word_addr;
     wire [1:0] cnn_byte_sel;
     wire cpu_access;
     wire cnn_access;
     wire cpu_cnn_addr_conflict;
-
-    integer i;
+    wire cnn_port_en;
+    wire [3:0] cnn_byte_we;
+    wire [7:0] cpu_dout0;
+    wire [7:0] cpu_dout1;
+    wire [7:0] cpu_dout2;
+    wire [7:0] cpu_dout3;
+    wire [7:0] cnn_dout0;
+    wire [7:0] cnn_dout1;
+    wire [7:0] cnn_dout2;
+    wire [7:0] cnn_dout3;
 
     assign cpu_word_addr = Mem_Address[11:2];
     assign cnn_word_addr = cnn_mem_addr[11:2];
@@ -1285,57 +1306,146 @@ module Data_Memory (
     assign cpu_access = Mem_Write_EX_MEM | Mem_Read_EX_MEM;
     assign cnn_access = cnn_mem_write_en | cnn_mem_read_en;
     assign cpu_cnn_addr_conflict = cpu_access && cnn_access && (cpu_word_addr == cnn_word_addr);
+    assign cnn_port_en = cnn_access && !cpu_cnn_addr_conflict;
+    assign cnn_byte_we = {4{cnn_port_en && cnn_mem_write_en}} &
+                         {cnn_byte_sel == 2'd3, cnn_byte_sel == 2'd2,
+                          cnn_byte_sel == 2'd1, cnn_byte_sel == 2'd0};
 
-    //-------------------------------------------------------------
-    // Functionality
-    //-------------------------------------------------------------
+    assign Mem_Read_Data = Mem_Read_EX_MEM ? {cpu_dout3, cpu_dout2, cpu_dout1, cpu_dout0} : 32'd0;
+    assign cnn_mem_read_data = (cnn_byte_sel == 2'd0) ? cnn_dout0 :
+                               (cnn_byte_sel == 2'd1) ? cnn_dout1 :
+                               (cnn_byte_sel == 2'd2) ? cnn_dout2 : cnn_dout3;
+
+    Byte_TDP_RAM #(
+        .DATA_FILE(DATA_B0_FILE),
+        .CNN_FILE(CNN_B0_FILE)
+    ) data_b0 (
+        .clk(clk_50MHZ),
+        .ena(cpu_access),
+        .wea(Mem_Write_EX_MEM),
+        .addra(cpu_word_addr),
+        .dina(Mem_Write_Data[7:0]),
+        .douta(cpu_dout0),
+        .enb(cnn_port_en),
+        .web(cnn_byte_we[0]),
+        .addrb(cnn_word_addr),
+        .dinb(cnn_mem_write_data),
+        .doutb(cnn_dout0)
+    );
+
+    Byte_TDP_RAM #(
+        .DATA_FILE(DATA_B1_FILE),
+        .CNN_FILE(CNN_B1_FILE)
+    ) data_b1 (
+        .clk(clk_50MHZ),
+        .ena(cpu_access),
+        .wea(Mem_Write_EX_MEM),
+        .addra(cpu_word_addr),
+        .dina(Mem_Write_Data[15:8]),
+        .douta(cpu_dout1),
+        .enb(cnn_port_en),
+        .web(cnn_byte_we[1]),
+        .addrb(cnn_word_addr),
+        .dinb(cnn_mem_write_data),
+        .doutb(cnn_dout1)
+    );
+
+    Byte_TDP_RAM #(
+        .DATA_FILE(DATA_B2_FILE),
+        .CNN_FILE(CNN_B2_FILE)
+    ) data_b2 (
+        .clk(clk_50MHZ),
+        .ena(cpu_access),
+        .wea(Mem_Write_EX_MEM),
+        .addra(cpu_word_addr),
+        .dina(Mem_Write_Data[23:16]),
+        .douta(cpu_dout2),
+        .enb(cnn_port_en),
+        .web(cnn_byte_we[2]),
+        .addrb(cnn_word_addr),
+        .dinb(cnn_mem_write_data),
+        .doutb(cnn_dout2)
+    );
+
+    Byte_TDP_RAM #(
+        .DATA_FILE(DATA_B3_FILE),
+        .CNN_FILE(CNN_B3_FILE)
+    ) data_b3 (
+        .clk(clk_50MHZ),
+        .ena(cpu_access),
+        .wea(Mem_Write_EX_MEM),
+        .addra(cpu_word_addr),
+        .dina(Mem_Write_Data[31:24]),
+        .douta(cpu_dout3),
+        .enb(cnn_port_en),
+        .web(cnn_byte_we[3]),
+        .addrb(cnn_word_addr),
+        .dinb(cnn_mem_write_data),
+        .doutb(cnn_dout3)
+    );
+
+endmodule
+
+// ================================================================
+// Byte_TDP_RAM - Vivado-friendly true dual-port RAM template
+//
+// Each byte lane is a simple 1024x8 true dual-port RAM. Both ports
+// have the same width, synchronous reads, optional writes, and direct
+// $readmemh initialization into the actual RAM array. This matches
+// the RAM inference patterns Vivado can map to block RAM.
+//
+// Earlier versions tried to infer one packed 1024x32 RAM and let the
+// CNN port write dynamic part-selects such as mem[addr][7:0]. Vivado
+// rejected that as an unsupported RAM template. Another version used
+// an init_mem array and copied it into byte lanes with variable-index
+// assignments in an initial block; Vivado ignored those non-constant
+// initialization assignments. Splitting the memory into explicit
+// byte-lane RAMs avoids both unsupported patterns.
+// ================================================================
+module Byte_TDP_RAM #(
+    parameter DATA_FILE = "",
+    parameter CNN_FILE = ""
+) (
+    input wire clk,
+    input wire ena,
+    input wire wea,
+    input wire [9:0] addra,
+    input wire [7:0] dina,
+    output reg [7:0] douta,
+    input wire enb,
+    input wire web,
+    input wire [9:0] addrb,
+    input wire [7:0] dinb,
+    output reg [7:0] doutb
+);
+    localparam DATA_MEM_WORDS = 1024;
+    localparam CPU_INIT_LAST  = 767;
+    localparam CNN_INIT_BASE  = 768;
+
+    (* ram_style = "block" *) reg [7:0] ram [0:DATA_MEM_WORDS-1];
+
+    integer i;
+
     initial begin
-        for (i = 0; i < DATA_MEM_BYTES; i = i + 1)
-            init_mem[i] = 8'h00;
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/mem_files/data.mem", init_mem, 0, CNN_INIT_BASE - 1);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/mem_files/cnn.mem", init_mem, CNN_INIT_BASE, DATA_MEM_BYTES - 1);
+        for (i = 0; i < DATA_MEM_WORDS; i = i + 1)
+            ram[i] = 8'h00;
+        $readmemh(DATA_FILE, ram, 0, CPU_INIT_LAST);
+        $readmemh(CNN_FILE, ram, CNN_INIT_BASE, DATA_MEM_WORDS - 1);
+    end
 
-        for (i = 0; i < DATA_MEM_WORDS; i = i + 1) begin
-            mem_b0[i] = init_mem[(i * 4) + 0];
-            mem_b1[i] = init_mem[(i * 4) + 1];
-            mem_b2[i] = init_mem[(i * 4) + 2];
-            mem_b3[i] = init_mem[(i * 4) + 3];
+    always @(negedge clk) begin
+        if (ena) begin
+            if (wea)
+                ram[addra] <= dina;
+            douta <= ram[addra];
         end
     end
 
-    assign Mem_LED_out = 32'd0;
-
-    always @(negedge clk_50MHZ) begin
-        if (Mem_Write_EX_MEM) begin
-            mem_b0[cpu_word_addr] <= Mem_Write_Data[7:0];
-            mem_b1[cpu_word_addr] <= Mem_Write_Data[15:8];
-            mem_b2[cpu_word_addr] <= Mem_Write_Data[23:16];
-            mem_b3[cpu_word_addr] <= Mem_Write_Data[31:24];
-            Mem_Read_Data <= 32'd0;
-        end else if (Mem_Read_EX_MEM) begin
-            Mem_Read_Data <= {mem_b3[cpu_word_addr], mem_b2[cpu_word_addr], mem_b1[cpu_word_addr], mem_b0[cpu_word_addr]};
-        end else begin
-            Mem_Read_Data <= 32'd0;
-        end
-
-        if (!cpu_cnn_addr_conflict) begin
-            if (cnn_mem_write_en) begin
-                case (cnn_byte_sel)
-                    2'd0: mem_b0[cnn_word_addr] <= cnn_mem_write_data;
-                    2'd1: mem_b1[cnn_word_addr] <= cnn_mem_write_data;
-                    2'd2: mem_b2[cnn_word_addr] <= cnn_mem_write_data;
-                    default: mem_b3[cnn_word_addr] <= cnn_mem_write_data;
-                endcase
-            end
-
-            if (cnn_mem_read_en) begin
-                case (cnn_byte_sel)
-                    2'd0: cnn_mem_read_data <= mem_b0[cnn_word_addr];
-                    2'd1: cnn_mem_read_data <= mem_b1[cnn_word_addr];
-                    2'd2: cnn_mem_read_data <= mem_b2[cnn_word_addr];
-                    default: cnn_mem_read_data <= mem_b3[cnn_word_addr];
-                endcase
-            end
+    always @(negedge clk) begin
+        if (enb) begin
+            if (web)
+                ram[addrb] <= dinb;
+            doutb <= ram[addrb];
         end
     end
 

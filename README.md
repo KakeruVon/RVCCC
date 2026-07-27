@@ -36,8 +36,10 @@ RVCCC/
 |   `-- debug_verify.py        # Detailed software/hardware consistency checks
 |-- mem_files/
 |   |-- instruction.mem        # 1KB instruction memory image, one 32-bit word per line in hex
-|   |-- data.mem               # First 3KB of data memory, one byte per line in hex
-|   |-- cnn.mem                # Last 1KB of data memory, 32x32 input image bytes
+|   |-- data.mem               # First 3KB data-memory byte source
+|   |-- cnn.mem                # Last 1KB data-memory byte source, 32x32 input image
+|   |-- data_b*.mem            # First 3KB split into four byte-lane RAM init files
+|   |-- cnn_b*.mem             # Last 1KB split into four byte-lane RAM init files
 |   |-- kernel*.mem            # Quantized convolution kernels and biases
 |   |-- weights.mem            # Quantized fully connected weights
 |   |-- biases.mem             # Quantized fully connected biases
@@ -115,7 +117,7 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
 
-Instruction memory and data memory are initialized from project-relative `$readmemh` files in `mem_files/`. `instruction.mem` fills the 1KB instruction RAM, `data.mem` fills the first 3KB of data RAM, and `cnn.mem` is loaded into the final 1KB data-memory window at byte addresses `0xC00..0xFFF`.
+Instruction memory is initialized from `instruction.mem`. Data memory is implemented as four 8-bit true dual-port byte-lane RAMs. `data_b0.mem` through `data_b3.mem` initialize the first 3KB, and `cnn_b0.mem` through `cnn_b3.mem` initialize the final 1KB at byte addresses `0xC00..0xFFF`. The byte-oriented `data.mem` and `cnn.mem` remain the source format for generating those lane files.
 
 
 
@@ -201,7 +203,7 @@ This keeps activations approximately at image scale after each layer while allow
 ## Current Limitations and Future Work
 
 - The CPU and CNN are integrated, but the CPU does not yet manage a complete SoC-level dataflow with a bus, host communication, and dynamic program/image loading.
-- Instruction RAM and data RAM now load from `.mem` files; the CPU data region is at the front of data memory and the CNN image occupies the final 1KB.
+- Instruction RAM loads from `.mem`; data RAM uses four byte-lane `.mem` file pairs so Vivado can infer true dual-port block RAM while preserving a CPU data region at the front and the CNN image in the final 1KB.
 - The CNN accelerator is sequential and resource-conscious; later versions can explore more parallelism, DMA-style data movement, and a cleaner memory-mapped accelerator interface.
 - The current visible output is a 4-bit LED prediction. Earlier seven-segment display logic is kept in comments, and future versions may restore a richer board-level display or host-side reporting path.
 
