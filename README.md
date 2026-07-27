@@ -35,7 +35,9 @@ RVCCC/
 |   |-- batch_accuracy.py      # Batch accuracy test for floating-point and quantized inference
 |   `-- debug_verify.py        # Detailed software/hardware consistency checks
 |-- mem_files/
-|   |-- cnn.mem                # 32x32 input image, one byte per line in hex
+|   |-- instruction.mem        # 1KB instruction memory image, one 32-bit word per line in hex
+|   |-- data.mem               # First 3KB of data memory, one byte per line in hex
+|   |-- cnn.mem                # Last 1KB of data memory, 32x32 input image bytes
 |   |-- kernel*.mem            # Quantized convolution kernels and biases
 |   |-- weights.mem            # Quantized fully connected weights
 |   |-- biases.mem             # Quantized fully connected biases
@@ -113,7 +115,7 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
 
-The CNN core currently loads memory files with absolute `$readmemh` paths. If the project is moved to another directory or another machine, update the paths inside `cnn_core` or replace them with project-relative paths before synthesis/simulation.
+Instruction memory and data memory are initialized from project-relative `$readmemh` files in `mem_files/`. `instruction.mem` fills the 1KB instruction RAM, `data.mem` fills the first 3KB of data RAM, and `cnn.mem` is loaded into the final 1KB data-memory window at byte addresses `0xC00..0xFFF`.
 
 
 
@@ -141,7 +143,7 @@ The v1 workflow is intentionally simple:
 6. Run the CNN core with fixed-point arithmetic and block-memory-backed parameters.
 7. Show the final predicted digit on four active-low LEDs.
 
-The instruction memory in `cpu.v` currently contains a small GCD program followed by a custom CNN trigger instruction (`FE00707F`) and then `ecall`. This keeps v1 focused on proving CPU-controlled accelerator activation rather than on a complete software loading path.
+The instruction memory is loaded from `mem_files/instruction.mem`. The checked-in image contains the original small GCD program followed by a custom CNN trigger instruction (`FE00707F`) and then `ecall`.
 
 
 #### Hardware Design
@@ -199,7 +201,7 @@ This keeps activations approximately at image scale after each layer while allow
 ## Current Limitations and Future Work
 
 - The CPU and CNN are integrated, but the CPU does not yet manage a complete SoC-level dataflow with a bus, host communication, and dynamic program/image loading.
-- The instruction memory and CNN memory initialization are currently static.
+- Instruction RAM and data RAM now load from `.mem` files; the CPU data region is at the front of data memory and the CNN image occupies the final 1KB.
 - The CNN accelerator is sequential and resource-conscious; later versions can explore more parallelism, DMA-style data movement, and a cleaner memory-mapped accelerator interface.
 - The current visible output is a 4-bit LED prediction. Earlier seven-segment display logic is kept in comments, and future versions may restore a richer board-level display or host-side reporting path.
 

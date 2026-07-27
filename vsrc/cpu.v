@@ -131,6 +131,11 @@ module cpu (
     // CNN
     wire cnn_en;
     wire [3:0] predicted_class_LED;
+    wire cnn_mem_read_en;
+    wire cnn_mem_write_en;
+    wire [11:0] cnn_mem_addr;
+    wire [7:0] cnn_mem_write_data;
+    wire [7:0] cnn_mem_read_data;
     
 
     //------------------------Parameters---------------------------
@@ -182,6 +187,7 @@ module cpu (
     );
 
     Instruction_Memory m2 (
+        .clk_50MHZ(clk_50MHZ),
         .Mem_Address(PC),
         .Instruction(Instruction)
     );
@@ -330,6 +336,11 @@ module cpu (
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
         .Mem_Write_Data(RF_Out2_EX_MEM),
         .Mem_Address(ALU_Result_EX_MEM),
+        .cnn_mem_read_en(cnn_mem_read_en),
+        .cnn_mem_write_en(cnn_mem_write_en),
+        .cnn_mem_addr(cnn_mem_addr),
+        .cnn_mem_write_data(cnn_mem_write_data),
+        .cnn_mem_read_data(cnn_mem_read_data),
         .Mem_Read_Data(Mem_Read_Data),
         .Mem_LED_out(Mem_LED_out)
     );
@@ -443,6 +454,11 @@ module cpu (
         .clk_20MHZ(clk_20MHZ),
         .rst(rst),
         .cnn_en(cnn_en),
+        .cnn_mem_read_en(cnn_mem_read_en),
+        .cnn_mem_write_en(cnn_mem_write_en),
+        .cnn_mem_addr(cnn_mem_addr),
+        .cnn_mem_write_data(cnn_mem_write_data),
+        .cnn_mem_read_data(cnn_mem_read_data),
         .predicted_class_LED(predicted_class_LED)
     );
 
@@ -543,6 +559,7 @@ endmodule
 
 module Instruction_Memory (
     // Inputs
+    input wire clk_50MHZ,
     input wire [31:0] Mem_Address,
 
     // Outputs
@@ -552,34 +569,28 @@ module Instruction_Memory (
     //-------------------------------------------------------------
     // Registers / Wires
     //-------------------------------------------------------------
-    (*ram_style = "block"*) reg [7:0] mem [47:0];
+    localparam INSTR_MEM_WORDS = 256; // 1KB instruction memory
+    (* ram_style = "block" *) reg [31:0] mem [0:INSTR_MEM_WORDS-1];
+
+    wire [7:0] word_addr;
+    integer i;
+
+    assign word_addr = Mem_Address[9:2];
 
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(*) begin
-        Instruction = {mem[Mem_Address+3], mem[Mem_Address+2], mem[Mem_Address+1], mem[Mem_Address]};
-    end
-    
     initial begin
-            mem[3]  = 8'h00; mem[2]  = 8'h02; mem[1]  = 8'ha3; mem[0]  = 8'h03; // lw t1,0(t0)
-            mem[7]  = 8'h00; mem[6]  = 8'h42; mem[5]  = 8'h82; mem[4]  = 8'h93; // addi t0,t0,4
-            mem[11] = 8'h00; mem[10] = 8'h02; mem[9]  = 8'ha3; mem[8]  = 8'h83; // lw t2,0(t0)
-            mem[15] = 8'h00; mem[14] = 8'h73; mem[13] = 8'h0c; mem[12] = 8'h63; // loop: beq t1,t2,exit
-            mem[19] = 8'h00; mem[18] = 8'h73; mem[17] = 8'h46; mem[16] = 8'h63; // blt t1,t2,L1
-            mem[23] = 8'h40; mem[22] = 8'h73; mem[21] = 8'h03; mem[20] = 8'h33; // sub t1,t1,t2
-            mem[27] = 8'hff; mem[26] = 8'h5f; mem[25] = 8'hf0; mem[24] = 8'h6f; // j loop
-            mem[31] = 8'h40; mem[30] = 8'h63; mem[29] = 8'h83; mem[28] = 8'hb3; // L1: sub t2,t2,t1
-            mem[35] = 8'hfe; mem[34] = 8'hdf; mem[33] = 8'hf0; mem[32] = 8'h6f; // j loop
-            mem[39] = 8'h00; mem[38] = 8'h62; mem[37] = 8'ha2; mem[36] = 8'h23; // exit: sw t1,4(t0)
-            // mem[43] = 8'h00; mem[42] = 8'h00; mem[41] = 8'h00; mem[40] = 8'h73; // ecall
-            mem[43] = 8'hFE; mem[42] = 8'h00; mem[41] = 8'h70; mem[40] = 8'h7F; // cnn FE00707F 11111110000000000111000001111111
-            mem[47] = 8'h00; mem[46] = 8'h00; mem[45] = 8'h00; mem[44] = 8'h73; // ecall
-            
+        for (i = 0; i < INSTR_MEM_WORDS; i = i + 1)
+            mem[i] = 32'h00000000;
+        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/instruction.mem", mem);
     end
-    
-endmodule
 
+    always @(negedge clk_50MHZ) begin
+        Instruction <= mem[word_addr];
+    end
+
+endmodule
 module Branch_Jump (
     // Inputs
     input wire [31:0] Instruction,
@@ -1233,51 +1244,102 @@ module Data_Memory (
     input wire Mem_Read_EX_MEM,
 
     input wire [31:0] Mem_Write_Data,
-    input wire [31:0] Mem_Address, // Limit the size of Mem_Address to 5 bits
+    input wire [31:0] Mem_Address,
+
+    // CNN data-memory port. cnn.mem is mapped to the last 1KB.
+    input wire cnn_mem_read_en,
+    input wire cnn_mem_write_en,
+    input wire [11:0] cnn_mem_addr,
+    input wire [7:0] cnn_mem_write_data,
 
     // Outputs
+    output reg [7:0] cnn_mem_read_data,
     output reg [31:0] Mem_Read_Data,
     output [31:0] Mem_LED_out
 );
     //-------------------------------------------------------------
     // Registers / Wires
     //-------------------------------------------------------------
-    reg [7:0] mem [19:0];
+    localparam DATA_MEM_BYTES = 4096;
+    localparam DATA_MEM_WORDS = 1024; // 4KB data memory
+    localparam CNN_INIT_BASE  = 3072;
+
+    (* ram_style = "block" *) reg [7:0] mem_b0 [0:DATA_MEM_WORDS-1];
+    (* ram_style = "block" *) reg [7:0] mem_b1 [0:DATA_MEM_WORDS-1];
+    (* ram_style = "block" *) reg [7:0] mem_b2 [0:DATA_MEM_WORDS-1];
+    (* ram_style = "block" *) reg [7:0] mem_b3 [0:DATA_MEM_WORDS-1];
+    reg [7:0] init_mem [0:DATA_MEM_BYTES-1];
+
+    wire [9:0] cpu_word_addr;
+    wire [9:0] cnn_word_addr;
+    wire [1:0] cnn_byte_sel;
+    wire cpu_access;
+    wire cnn_access;
+    wire cpu_cnn_addr_conflict;
+
+    integer i;
+
+    assign cpu_word_addr = Mem_Address[11:2];
+    assign cnn_word_addr = cnn_mem_addr[11:2];
+    assign cnn_byte_sel = cnn_mem_addr[1:0];
+    assign cpu_access = Mem_Write_EX_MEM | Mem_Read_EX_MEM;
+    assign cnn_access = cnn_mem_write_en | cnn_mem_read_en;
+    assign cpu_cnn_addr_conflict = cpu_access && cnn_access && (cpu_word_addr == cnn_word_addr);
 
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    
     initial begin
-            mem[3]  = 0; mem[2]  = 0; mem[1]  = 0; mem[0]  = 15; 
-            mem[7]  = 0; mem[6]  = 0; mem[5]  = 0; mem[4]  = 6; 
-            mem[11] = 0; mem[10] = 0; mem[9]  = 0; mem[8]  = 0;
-            mem[15] = 0; mem[14] = 0; mem[13] = 0; mem[12] = 0;
-            mem[19] = 0; mem[18] = 0; mem[17] = 0; mem[16] = 0;
+        for (i = 0; i < DATA_MEM_BYTES; i = i + 1)
+            init_mem[i] = 8'h00;
+        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/mem_files/data.mem", init_mem, 0, CNN_INIT_BASE - 1);
+        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/mem_files/cnn.mem", init_mem, CNN_INIT_BASE, DATA_MEM_BYTES - 1);
+
+        for (i = 0; i < DATA_MEM_WORDS; i = i + 1) begin
+            mem_b0[i] = init_mem[(i * 4) + 0];
+            mem_b1[i] = init_mem[(i * 4) + 1];
+            mem_b2[i] = init_mem[(i * 4) + 2];
+            mem_b3[i] = init_mem[(i * 4) + 3];
+        end
     end
-    
-    assign Mem_LED_out = {mem[11], mem[10], mem[9],  mem[8]};
+
+    assign Mem_LED_out = 32'd0;
 
     always @(negedge clk_50MHZ) begin
-        // Write operation
-            if (Mem_Write_EX_MEM == 1) begin
-                mem[Mem_Address]    <= Mem_Write_Data[7:0];
-                mem[Mem_Address+1]  <= Mem_Write_Data[15:8];
-                mem[Mem_Address+2]  <= Mem_Write_Data[23:16];
-                mem[Mem_Address+3]  <= Mem_Write_Data[31:24];
-            end
-            // Read operation
-            else if (Mem_Read_EX_MEM == 1) begin
-                Mem_Read_Data <= {mem[Mem_Address+3], mem[Mem_Address+2], mem[Mem_Address+1], mem[Mem_Address]};
-            end
-            // Default value
-            else begin
-                Mem_Read_Data <= 32'd0;
-            end
+        if (Mem_Write_EX_MEM) begin
+            mem_b0[cpu_word_addr] <= Mem_Write_Data[7:0];
+            mem_b1[cpu_word_addr] <= Mem_Write_Data[15:8];
+            mem_b2[cpu_word_addr] <= Mem_Write_Data[23:16];
+            mem_b3[cpu_word_addr] <= Mem_Write_Data[31:24];
+            Mem_Read_Data <= 32'd0;
+        end else if (Mem_Read_EX_MEM) begin
+            Mem_Read_Data <= {mem_b3[cpu_word_addr], mem_b2[cpu_word_addr], mem_b1[cpu_word_addr], mem_b0[cpu_word_addr]};
+        end else begin
+            Mem_Read_Data <= 32'd0;
         end
 
-endmodule
+        if (!cpu_cnn_addr_conflict) begin
+            if (cnn_mem_write_en) begin
+                case (cnn_byte_sel)
+                    2'd0: mem_b0[cnn_word_addr] <= cnn_mem_write_data;
+                    2'd1: mem_b1[cnn_word_addr] <= cnn_mem_write_data;
+                    2'd2: mem_b2[cnn_word_addr] <= cnn_mem_write_data;
+                    default: mem_b3[cnn_word_addr] <= cnn_mem_write_data;
+                endcase
+            end
 
+            if (cnn_mem_read_en) begin
+                case (cnn_byte_sel)
+                    2'd0: cnn_mem_read_data <= mem_b0[cnn_word_addr];
+                    2'd1: cnn_mem_read_data <= mem_b1[cnn_word_addr];
+                    2'd2: cnn_mem_read_data <= mem_b2[cnn_word_addr];
+                    default: cnn_mem_read_data <= mem_b3[cnn_word_addr];
+                endcase
+            end
+        end
+    end
+
+endmodule
 module MEM_WB_Reg (
     // Inputs
     // Control Signals
@@ -1683,6 +1745,11 @@ module cnn_core (
     input clk_20MHZ,
     input rst,
     input cnn_en,
+    output wire cnn_mem_read_en,
+    output wire cnn_mem_write_en,
+    output wire [11:0] cnn_mem_addr,
+    output wire [7:0] cnn_mem_write_data,
+    input wire [7:0] cnn_mem_read_data,
     output reg [3:0] predicted_class_LED
 );
 
@@ -1717,10 +1784,9 @@ module cnn_core (
     reg [4:0] state;
 
     // ================================================================
-    // Shared memory for CNN weights, biases, and intermediate results
-    // Use block RAM to reduce LUT and MUX usage.
+    // CNN weights, biases, and intermediate results.
+    // The input image lives in the last 1KB of shared Data_Memory.
     // ================================================================
-    (* rom_style = "block" *) reg [7:0] image_rom [0:1023];
     (* rom_style = "block" *) reg signed [15:0] kernel1_rom [0:8];
     // Vivado synth can reject $readmemh when an initialized memory is
     // only read with a literal index like rom[0]. Keep the single-entry
@@ -1743,7 +1809,6 @@ module cnn_core (
     reg [8:0] fc_weight_addr;
     reg [3:0] fc_bias_addr;
 
-    reg [7:0] image_dout;
     reg signed [15:0] kernel1_dout;
     reg signed [31:0] kernel1_bias_dout;
     reg signed [15:0] kernel2_dout;
@@ -1753,6 +1818,12 @@ module cnn_core (
     reg signed [15:0] fc_weight_dout;
     reg signed [31:0] fc_bias_dout;
 
+    localparam [11:0] CNN_IMAGE_BASE = 12'd3072;
+
+    assign cnn_mem_read_en = 1'b1;
+    assign cnn_mem_write_en = 1'b0;
+    assign cnn_mem_write_data = 8'd0;
+    assign cnn_mem_addr = CNN_IMAGE_BASE + image_addr;
     assign kernel1_bias_addr = 1'b0;
     assign kernel2_bias_addr = 1'b0;
 
@@ -1790,7 +1861,7 @@ module cnn_core (
     // Use the same MAC to reduce DSP usage, 
     // given that the process is now sequential.
     // ================================================================
-    assign mac_operand_a = (state == S_C1_ACCUM) ? $signed({24'd0, image_dout}) :
+    assign mac_operand_a = (state == S_C1_ACCUM) ? $signed({24'd0, cnn_mem_read_data}) :
                            (state == S_C2_ACCUM) ? $signed(pool1_dout) :
                                                    $signed(pool2_dout);
     assign mac_operand_b = (state == S_C1_ACCUM) ? $signed({{16{kernel1_dout[15]}}, kernel1_dout}) :
@@ -1857,7 +1928,6 @@ module cnn_core (
     endfunction
 
     initial begin
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/cnn.mem", image_rom);
         $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel1.mem", kernel1_rom);
         $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel1_bias.mem", kernel1_bias_rom);
         $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel2.mem", kernel2_rom);
@@ -1873,7 +1943,6 @@ module cnn_core (
     // vivado will use too many LUTs to implement the memory.
     // ================================================================
     always @(posedge clk_20MHZ) begin
-        image_dout <= image_rom[image_addr];
         kernel1_dout <= kernel1_rom[kernel1_addr];
         kernel1_bias_dout <= kernel1_bias_rom[kernel1_bias_addr];
         kernel2_dout <= kernel2_rom[kernel2_addr];
