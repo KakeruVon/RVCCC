@@ -18,7 +18,8 @@ RVCCC/
 |-- vsrc/
 |   `-- cpu.v                  # Top-level Verilog source: RISC-V CPU, CNN core, LED output logic
 |-- testbench/
-|   `-- cpu_tb.v               # Simulation testbench for the integrated CPU + CNN design
+|   |-- cpu_tb.v               # Simulation testbench for the integrated CPU + CNN design
+|   `-- cpu_rv32i_tb.v         # Simulation testbench for rv32i instruction test
 |-- csrc/
 |   `-- run.cpp                # Verilator + NVBoard simulation entry
 |-- constr/

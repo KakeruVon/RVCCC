@@ -28,8 +28,7 @@ module cpu (
     assign clk_20MHZ = clk;
     
     // Flags
-    wire Zero_Flag;
-    wire Sign_Flag;
+    wire Branch_Taken;
 
     //-----------------------Data Signals--------------------------
     wire [31:0] PC;                 // The current PC
@@ -39,11 +38,15 @@ module cpu (
     wire [4:0] rs2;
     wire [4:0] rd;
     wire [3:0] ALU_Op;
+    wire ALU_In1_PC;
+    wire [2:0] Funct3;
     wire [31:0] RF_Out1, RF_Out2;
     wire [31:0] Imm_Value;
     wire [31:0] ALU_Result;
+    wire [31:0] Store_Data;
     wire [31:0] Mem_Read_Data;
     wire [31:0] Reg_Write_Data;
+    wire [31:0] Mem_LED_out;
 
     // Stage Register wires
     // IF_ID Stage
@@ -61,13 +64,16 @@ module cpu (
     wire [31:0] RF_Out2_ID_EX;
     wire [31:0] Imm_Value_ID_EX;
     wire [31:0] Return_Addr_ID_EX;
-    wire Instruction_14_ID_EX;
+    wire ALU_In1_PC_ID_EX;
+    wire [2:0] Funct3_ID_EX;
 
     // EX_MEM Stage
     wire [4:0] rd_EX_MEM;
     wire [31:0] ALU_Result_EX_MEM;
     wire [31:0] RF_Out2_EX_MEM;
+    wire [31:0] Forward_Data_EX_MEM;
     wire [31:0] Return_Addr_EX_MEM;
+    wire [2:0] Funct3_EX_MEM;
 
     // MEM_WB Stage
     wire [4:0] rd_MEM_WB;
@@ -84,8 +90,10 @@ module cpu (
     wire Mem_to_Reg;                // Memory to Register Control Signal
 
     wire Signal_Flush;              // Pipeline flush
+    wire Signal_Flush_Pipeline;     // Pipeline flush including EX-stage jumps
     wire Signal_Branch;             // Branch
-    wire Signal_Jump;               // Jump
+    wire Signal_Jal;               // JAL
+    wire Signal_Jalr;               // Register-indirect jump
     wire Signal_Stall;              // Stall
     wire Signal_Ecall;              // Ecall
     wire [1:0] State;               // Current state of branch predictor
@@ -95,13 +103,15 @@ module cpu (
     // Stage Register wires
     // IF_ID Stage
     wire Signal_Branch_IF_ID;
-    wire Signal_Jump_IF_ID;
+    wire Signal_Jal_IF_ID;
+    wire Signal_Jalr_IF_ID;
     wire [1:0] State_IF_ID;
     wire [1:0] Addr_IF_ID;
 
     // ID_EX Stage
     wire Signal_Branch_ID_EX;
-    wire Signal_Jump_ID_EX;
+    wire Signal_Jal_ID_EX;
+    wire Signal_Jalr_ID_EX;
     wire [1:0] State_ID_EX;
     wire [1:0] Addr_ID_EX;
     wire [3:0] ALU_Op_ID_EX;
@@ -112,14 +122,16 @@ module cpu (
     wire Mem_to_Reg_ID_EX;
 
     // EX_MEM stage
-    wire Signal_Jump_EX_MEM;
+    wire Signal_Jal_EX_MEM;
+    wire Signal_Jalr_EX_MEM;
     wire Reg_Write_EX_MEM;
     wire Mem_Read_EX_MEM;
     wire Mem_Write_EX_MEM;
     wire Mem_to_Reg_EX_MEM;
 
     // MEM_WB Stage
-    wire Signal_Jump_MEM_WB;
+    wire Signal_Jal_MEM_WB;
+    wire Signal_Jalr_MEM_WB;
     wire Reg_Write_MEM_WB;
     wire Mem_to_Reg_MEM_WB;
 
@@ -149,7 +161,10 @@ module cpu (
     assign rs1 = Instruction_IF_ID[19:15];    // Register Select 1
     assign rs2 = Instruction_IF_ID[24:20];    // Register Select 1
     assign rd = Instruction_IF_ID[11:7];      // Destination Register Select
-    assign Outcome = Instruction_14_ID_EX ? (Signal_Branch_ID_EX && Sign_Flag) : (Signal_Branch_ID_EX && Zero_Flag);
+    assign Outcome = Signal_Branch_ID_EX && Branch_Taken;
+    assign Signal_Flush_Pipeline = Signal_Flush | Signal_Jalr_ID_EX;
+    assign Forward_Data_EX_MEM = (Signal_Jal_EX_MEM || Signal_Jalr_EX_MEM) ?
+                                 Return_Addr_EX_MEM : ALU_Result_EX_MEM;
     
     //-------------------------------------------------------------
     // Module Instantiation
@@ -175,13 +190,17 @@ module cpu (
         .rst(rst),
         .Signal_Branch(Signal_Branch),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
-        .Signal_Jump(Signal_Jump),
+        .Signal_Jal(Signal_Jal),
+        .Signal_Jalr_ID_EX(Signal_Jalr_ID_EX),
         .Outcome(Outcome),
         .Signal_Stall(Signal_Stall),
         .Signal_Ecall(Signal_Ecall),
         .State(State),
+        .State_ID_EX(State_ID_EX),
         .Jump_Addr(Jump_Addr),
         .PC_ID_EX(PC_ID_EX),
+        .Return_Addr_ID_EX(Return_Addr_ID_EX),
+        .Jalr_Target(ALU_Result),
         .PC(PC)
     );
 
@@ -194,7 +213,8 @@ module cpu (
     Branch_Jump m3 (
         .Instruction(Instruction),
         .Signal_Branch(Signal_Branch),
-        .Signal_Jump(Signal_Jump),
+        .Signal_Jal(Signal_Jal),
+        .Signal_Jalr(Signal_Jalr),
         .Signal_Ecall(Signal_Ecall),
         .Jump_Addr(Jump_Addr)
     );
@@ -202,16 +222,18 @@ module cpu (
     IF_ID_reg m4 (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
-        .Signal_Flush(Signal_Flush),
+        .Signal_Flush(Signal_Flush_Pipeline),
         .Signal_Branch(Signal_Branch),
-        .Signal_Jump(Signal_Jump),
+        .Signal_Jal(Signal_Jal),
+        .Signal_Jalr(Signal_Jalr),
         .Signal_Stall(Signal_Stall),
         .State(State),
         .PC(PC),
         .Instruction(Instruction),
         .Jump_Addr(Jump_Addr),
         .Signal_Branch_IF_ID(Signal_Branch_IF_ID),
-        .Signal_Jump_IF_ID(Signal_Jump_IF_ID),
+        .Signal_Jal_IF_ID(Signal_Jal_IF_ID),
+        .Signal_Jalr_IF_ID(Signal_Jalr_IF_ID),
         .State_IF_ID(State_IF_ID),
         .Addr_IF_ID(Addr_IF_ID),
         .PC_IF_ID(PC_IF_ID),
@@ -241,6 +263,8 @@ module cpu (
         .Mem_Write(Mem_Write),
         .Mem_to_Reg(Mem_to_Reg),
         .ALU_Op(ALU_Op),
+        .ALU_In1_PC(ALU_In1_PC),
+        .Funct3(Funct3),
         .Imm_Value(Imm_Value),
         .cnn_en(cnn_en)
     );
@@ -248,9 +272,10 @@ module cpu (
     ID_EX_reg m7 (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
-        .Signal_Flush(Signal_Flush),
+        .Signal_Flush(Signal_Flush_Pipeline),
         .Signal_Branch_IF_ID(Signal_Branch_IF_ID),
-        .Signal_Jump_IF_ID(Signal_Jump_IF_ID),
+        .Signal_Jal_IF_ID(Signal_Jal_IF_ID),
+        .Signal_Jalr_IF_ID(Signal_Jalr_IF_ID),
         .Signal_Stall(Signal_Stall),
         .Addr_IF_ID(Addr_IF_ID),
         .State_IF_ID(State_IF_ID),
@@ -260,6 +285,8 @@ module cpu (
         .Mem_Read(Mem_Read),
         .Mem_Write(Mem_Write),
         .Mem_to_Reg(Mem_to_Reg),
+        .ALU_In1_PC(ALU_In1_PC),
+        .Funct3(Funct3),
         .rs1(rs1),
         .rs2(rs2),
         .rd(rd),
@@ -268,10 +295,10 @@ module cpu (
         .RF_Out2(RF_Out2),
         .Jump_Addr_IF_ID(Jump_Addr_IF_ID),
         .Return_Addr_IF_ID(Return_Addr_IF_ID),
-        .Instruction_14_IF_ID(Instruction_IF_ID[14]),
         .Imm_Value(Imm_Value),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
-        .Signal_Jump_ID_EX(Signal_Jump_ID_EX),
+        .Signal_Jal_ID_EX(Signal_Jal_ID_EX),
+        .Signal_Jalr_ID_EX(Signal_Jalr_ID_EX),
         .Addr_ID_EX(Addr_ID_EX),
         .State_ID_EX(State_ID_EX),
         .ALU_Op_ID_EX(ALU_Op_ID_EX),
@@ -280,6 +307,8 @@ module cpu (
         .Mem_Read_ID_EX(Mem_Read_ID_EX),
         .Mem_Write_ID_EX(Mem_Write_ID_EX),
         .Mem_to_Reg_ID_EX(Mem_to_Reg_ID_EX),
+        .ALU_In1_PC_ID_EX(ALU_In1_PC_ID_EX),
+        .Funct3_ID_EX(Funct3_ID_EX),
         .rs1_ID_EX(rs1_ID_EX),
         .rs2_ID_EX(rs2_ID_EX),
         .rd_ID_EX(rd_ID_EX),
@@ -287,7 +316,6 @@ module cpu (
         .RF_Out1_ID_EX(RF_Out1_ID_EX),
         .RF_Out2_ID_EX(RF_Out2_ID_EX),
         .Return_Addr_ID_EX(Return_Addr_ID_EX),
-        .Instruction_14_ID_EX(Instruction_14_ID_EX),
         .Imm_Value_ID_EX(Imm_Value_ID_EX)
     );
 
@@ -298,27 +326,33 @@ module cpu (
         .Forward_A(Forward_A),
         .Forward_B(Forward_B),
         .ALU_Src_ID_EX(ALU_Src_ID_EX),
-        .ALU_Result_EX_MEM(ALU_Result_EX_MEM),
+        .ALU_In1_PC_ID_EX(ALU_In1_PC_ID_EX),
+        .Funct3_ID_EX(Funct3_ID_EX),
+        .PC_ID_EX(Return_Addr_ID_EX - 32'd4),
+        .ALU_Result_EX_MEM(Forward_Data_EX_MEM),
         .Reg_Write_Data_MEM_WB(Reg_Write_Data),
-        .Imm_Value_ID_EX(Imm_Value_ID_EX),     
-        .Zero_Flag(Zero_Flag),
-        .Sign_Flag(Sign_Flag),
+        .Imm_Value_ID_EX(Imm_Value_ID_EX),
+        .Branch_Taken(Branch_Taken),
+        .Store_Data(Store_Data),
         .ALU_Result(ALU_Result)
     );
 
     EX_MEM_Reg m9 (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
-        .Signal_Jump_ID_EX(Signal_Jump_ID_EX),
+        .Signal_Jal_ID_EX(Signal_Jal_ID_EX),
+        .Signal_Jalr_ID_EX(Signal_Jalr_ID_EX),
         .Reg_Write_ID_EX(Reg_Write_ID_EX),
         .Mem_Read_ID_EX(Mem_Read_ID_EX),
         .Mem_Write_ID_EX(Mem_Write_ID_EX),
         .Mem_to_Reg_ID_EX(Mem_to_Reg_ID_EX),
         .rd_ID_EX(rd_ID_EX),
         .ALU_Result(ALU_Result),
-        .RF_Out2_ID_EX(RF_Out2_ID_EX),
+        .RF_Out2_ID_EX(Store_Data),
         .Return_Addr_ID_EX(Return_Addr_ID_EX),
-        .Signal_Jump_EX_MEM(Signal_Jump_EX_MEM),
+        .Funct3_ID_EX(Funct3_ID_EX),
+        .Signal_Jal_EX_MEM(Signal_Jal_EX_MEM),
+        .Signal_Jalr_EX_MEM(Signal_Jalr_EX_MEM),
         .Reg_Write_EX_MEM(Reg_Write_EX_MEM),
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
         .Mem_Write_EX_MEM(Mem_Write_EX_MEM),
@@ -326,7 +360,8 @@ module cpu (
         .rd_EX_MEM(rd_EX_MEM),
         .ALU_Result_EX_MEM(ALU_Result_EX_MEM),
         .RF_Out2_EX_MEM(RF_Out2_EX_MEM),
-        .Return_Addr_EX_MEM(Return_Addr_EX_MEM)
+        .Return_Addr_EX_MEM(Return_Addr_EX_MEM),
+        .Funct3_EX_MEM(Funct3_EX_MEM)
     );
 
     Data_Memory m10 (
@@ -335,25 +370,29 @@ module cpu (
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
         .Mem_Write_Data(RF_Out2_EX_MEM),
         .Mem_Address(ALU_Result_EX_MEM),
+        .Mem_Funct3_EX_MEM(Funct3_EX_MEM),
         .cnn_mem_read_en(cnn_mem_read_en),
         .cnn_mem_write_en(cnn_mem_write_en),
         .cnn_mem_addr(cnn_mem_addr),
         .cnn_mem_write_data(cnn_mem_write_data),
         .cnn_mem_read_data(cnn_mem_read_data),
-        .Mem_Read_Data(Mem_Read_Data)
+        .Mem_Read_Data(Mem_Read_Data),
+        .Mem_LED_out(Mem_LED_out)
     );
 
     MEM_WB_Reg m11 (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
-        .Signal_Jump_EX_MEM(Signal_Jump_EX_MEM),
+        .Signal_Jal_EX_MEM(Signal_Jal_EX_MEM),
+        .Signal_Jalr_EX_MEM(Signal_Jalr_EX_MEM),
         .Reg_Write_EX_MEM(Reg_Write_EX_MEM),
         .Mem_to_Reg_EX_MEM(Mem_to_Reg_EX_MEM),
         .rd_EX_MEM(rd_EX_MEM),
         .ALU_Result_EX_MEM(ALU_Result_EX_MEM),
         .Mem_Read_Data(Mem_Read_Data),
         .Return_Addr_EX_MEM(Return_Addr_EX_MEM),
-        .Signal_Jump_MEM_WB(Signal_Jump_MEM_WB),
+        .Signal_Jal_MEM_WB(Signal_Jal_MEM_WB),
+        .Signal_Jalr_MEM_WB(Signal_Jalr_MEM_WB),
         .Reg_Write_MEM_WB(Reg_Write_MEM_WB),
         .Mem_to_Reg_MEM_WB(Mem_to_Reg_MEM_WB),
         .rd_MEM_WB(rd_MEM_WB),
@@ -394,6 +433,7 @@ module cpu (
 
     Branch_Predictor m15(
         .Outcome(Outcome),
+        .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
         .State_ID_EX(State_ID_EX),
         .Entry(Entry),
         .Signal_Flush(Signal_Flush)
@@ -401,7 +441,8 @@ module cpu (
 
     Writeback_Unit m16 (
         .Mem_to_Reg_MEM_WB(Mem_to_Reg_MEM_WB),
-        .Signal_Jump_MEM_WB(Signal_Jump_MEM_WB),
+        .Signal_Jal_MEM_WB(Signal_Jal_MEM_WB),
+        .Signal_Jalr_MEM_WB(Signal_Jalr_MEM_WB),
         .ALU_Result_MEM_WB(ALU_Result_MEM_WB),
         .Mem_Read_Data_MEM_WB(Mem_Read_Data_MEM_WB),
         .Return_Addr_MEM_WB(Return_Addr_MEM_WB),
@@ -514,13 +555,17 @@ module PC_Module (
     input wire rst,
     input wire Signal_Branch,
     input wire Signal_Branch_ID_EX,
-    input wire Signal_Jump,
+    input wire Signal_Jal,
+    input wire Signal_Jalr_ID_EX,
     input wire Outcome,
     input wire Signal_Stall,
     input wire Signal_Ecall,
     input wire [1:0] State,
+    input wire [1:0] State_ID_EX,
     input wire [31:0] Jump_Addr,
     input wire [31:0] PC_ID_EX,
+    input wire [31:0] Return_Addr_ID_EX,
+    input wire [31:0] Jalr_Target,
 
     // Outputs
     output reg [31:0] PC
@@ -529,26 +574,35 @@ module PC_Module (
     // Registers / Wires
     //-------------------------------------------------------------
     wire Prediction;
+    wire Prediction_ID_EX;
+    wire Branch_Mispredict;
+    wire [31:0] Jalr_Target_Aligned;
     
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------    
     assign Prediction = State[1];
+    assign Prediction_ID_EX = State_ID_EX[1];
+    assign Branch_Mispredict = Signal_Branch_ID_EX && (Prediction_ID_EX ^ Outcome);
+    assign Jalr_Target_Aligned = {Jalr_Target[31:1], 1'b0};
     
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst==1) begin
             PC <= 32'h0; // rst
         end
+        else if (Signal_Jalr_ID_EX==1) begin
+            PC <= Jalr_Target_Aligned;
+        end
+        else if (Branch_Mispredict==1) begin
+            PC <= Outcome ? PC_ID_EX : Return_Addr_ID_EX;
+        end
         else if (Signal_Stall==1 || Signal_Ecall==1) begin
-            PC <= PC+0; // Stall
+            PC <= PC; // Stall
         end
-        else if (Signal_Branch_ID_EX==1 && Outcome==1) begin
-            PC <= PC_ID_EX; // Hazard
+        else if ((Signal_Branch==1 && Prediction==1) || Signal_Jal==1) begin
+            PC <= PC + Jump_Addr; // JAL or predicted branch
         end
-        else if ((Signal_Branch==1 && Prediction==1) || Signal_Jump==1) begin
-            PC <= PC + Jump_Addr; // Jump
-        end
-        else if (Signal_Branch_ID_EX==0 || (Signal_Branch_ID_EX==1 && Outcome==0) || (Signal_Branch==1 && Prediction==0) || Signal_Branch==0 || Signal_Jump==0) begin
+        else begin
             PC <= PC + 4; // Normal execution
         end
     end
@@ -595,7 +649,8 @@ module Branch_Jump (
 
     // Outputs
     output reg Signal_Branch,
-    output reg Signal_Jump,
+    output reg Signal_Jal,
+    output reg Signal_Jalr,
     output reg Signal_Ecall,
     output reg [31:0] Jump_Addr
 );
@@ -611,32 +666,36 @@ module Branch_Jump (
     assign Opcode = Instruction[6:0];
 
     always @* begin
+        Signal_Branch = 0;
+        Signal_Jal = 0;
+        Signal_Jalr = 0;
+        Signal_Ecall = 0;
+        Jump_Addr = 32'd0;
+
         case (Opcode)
             7'b1100011: begin       // B-Type
                 Signal_Branch = 1;
-                Signal_Jump = 0;
+                Jump_Addr = {{19{Instruction[31]}}, Instruction[31], Instruction[7], Instruction[30:25], Instruction[11:8], 1'b0};
+            end
+
+            7'b1101111: begin       // JAL
+                Signal_Jal = 1;
+                Jump_Addr = {{11{Instruction[31]}}, Instruction[31], Instruction[19:12], Instruction[20], Instruction[30:21], 1'b0};
+            end
+
+            7'b1100111: begin       // JALR, resolved in EX when rs1 is available
+                Signal_Jalr = 1;
+            end
+
+            7'b1110011: begin       // ECALL only; EBREAK is intentionally not implemented
+                Signal_Ecall = (Instruction == 32'h00000073);
+            end
+
+            default: begin
+                Signal_Branch = 0;
+                Signal_Jal = 0;
+                Signal_Jalr = 0;
                 Signal_Ecall = 0;
-                Jump_Addr = {{20{Instruction[31]}}, Instruction[7], Instruction[30:25], Instruction[11:8], 1'b0};      
-            end
-
-            7'b1101111: begin       // J-Type
-                Signal_Branch = 0;
-                Signal_Jump = 1;
-                Signal_Ecall = 0;
-                Jump_Addr = {{12{Instruction[31]}}, Instruction[19:12], Instruction[20], Instruction[30:21], 1'b0};    
-            end
-
-            7'b1110011: begin       // Ecall
-                Signal_Branch = 0;
-                Signal_Jump = 0;
-                Signal_Ecall = 1;
-                Jump_Addr = 32'dx;                                                  
-            end
-
-            default: begin      // Rest of the instructions
-                Signal_Branch = 0;
-                Signal_Jump = 0;
-                Signal_Ecall = 0;                                                   
                 Jump_Addr = 32'd0;
             end
         endcase
@@ -651,7 +710,8 @@ module IF_ID_reg (
     input wire rst,
     input wire Signal_Flush,            // Pipeline flush
     input wire Signal_Branch,           // Branch
-    input wire Signal_Jump,             // Jump
+    input wire Signal_Jal,              // JAL
+    input wire Signal_Jalr,             // Register-indirect jump
     input wire Signal_Stall,            // Stall
     input wire [1:0] State,             // Current state of branch predictor
 
@@ -663,7 +723,8 @@ module IF_ID_reg (
     // Outputs
     // Control Signals
     output reg Signal_Branch_IF_ID,
-    output reg Signal_Jump_IF_ID,
+    output reg Signal_Jal_IF_ID,
+    output reg Signal_Jalr_IF_ID,
     output reg [1:0] State_IF_ID,
 
     // Data Signals
@@ -681,7 +742,8 @@ module IF_ID_reg (
         if (rst == 1) begin
             // Control Signals
             Signal_Branch_IF_ID <= 0;
-            Signal_Jump_IF_ID   <= 0;
+            Signal_Jal_IF_ID   <= 0;
+            Signal_Jalr_IF_ID   <= 0;
             State_IF_ID         <= 0;
 
             // Data Signals
@@ -696,7 +758,8 @@ module IF_ID_reg (
 
             // Control Signals
             Signal_Branch_IF_ID <= 0;
-            Signal_Jump_IF_ID   <= 0;
+            Signal_Jal_IF_ID   <= 0;
+            Signal_Jalr_IF_ID   <= 0;
             State_IF_ID         <= 0;
 
             // Data Signals
@@ -711,7 +774,8 @@ module IF_ID_reg (
 
             // Control Signals
             Signal_Branch_IF_ID <= Signal_Branch;
-            Signal_Jump_IF_ID   <= Signal_Jump;
+            Signal_Jal_IF_ID   <= Signal_Jal;
+            Signal_Jalr_IF_ID   <= Signal_Jalr;
             State_IF_ID         <= State;
 
             // Data Signals
@@ -776,6 +840,8 @@ module Control_Unit (
     // Outputs
     output reg Reg_Write, ALU_Src, Mem_Read, Mem_Write, Mem_to_Reg, cnn_en,
     output reg [3:0] ALU_Op,
+    output reg ALU_In1_PC,
+    output reg [2:0] Funct3,
     output reg [31:0] Imm_Value
 );
     
@@ -783,147 +849,166 @@ module Control_Unit (
     // Registers / Wires
     //-------------------------------------------------------------
     wire [6:0] Opcode;
-    wire [10:0] Control;
+    wire [2:0] Instr_Funct3;
+    wire [6:0] Funct7;
+
+    localparam [3:0] ALU_ADD  = 4'h0;
+    localparam [3:0] ALU_SUB  = 4'h1;
+    localparam [3:0] ALU_SLL  = 4'h2;
+    localparam [3:0] ALU_SRL  = 4'h3;
+    localparam [3:0] ALU_SLT  = 4'h4;
+    localparam [3:0] ALU_OR   = 4'h5;
+    localparam [3:0] ALU_AND  = 4'h6;
+    localparam [3:0] ALU_XOR  = 4'h7;
+    localparam [3:0] ALU_SRA  = 4'h8;
+    localparam [3:0] ALU_SLTU = 4'h9;
+    localparam [3:0] ALU_COPY_B = 4'hA;
 
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-
-    // Defining opcode and control fields
     assign Opcode = Instruction_IF_ID[6:0];
-    assign Control = {Instruction_IF_ID[30], Instruction_IF_ID[14:12], Instruction_IF_ID[6:0]};
+    assign Instr_Funct3 = Instruction_IF_ID[14:12];
+    assign Funct7 = Instruction_IF_ID[31:25];
 
-    // Control Signals decode (except ALU_Op)
     always @(*) begin
-        if (Signal_Stall) begin
-            Reg_Write   = 0;
-            ALU_Src     = 0;
-            Mem_Read    = 0;
-            Mem_Write   = 0;
-            Mem_to_Reg  = 0;
-            Imm_Value   = 32'h00000000;
-            cnn_en      = 1'b0;
-        end
+        Reg_Write  = 0;
+        ALU_Src    = 0;
+        Mem_Read   = 0;
+        Mem_Write  = 0;
+        Mem_to_Reg = 0;
+        cnn_en     = 1'b0;
+        ALU_Op     = ALU_ADD;
+        ALU_In1_PC = 1'b0;
+        Funct3     = Instr_Funct3;
+        Imm_Value  = 32'h00000000;
 
-        else begin
+        if (!Signal_Stall) begin
             case (Opcode)
-                7'b0110011:         // R-type instructions
-                    begin
-                        Reg_Write   = 1;
-                        ALU_Src     = 0;
-                        Mem_Read    = 0;
-                        Mem_Write   = 0;
-                        Mem_to_Reg  = 0;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'b0;
-                    end
-                7'b0000011:         // I-type instructions (LW)
-                    begin
-                        Reg_Write   = 1;
-                        ALU_Src     = 1;
-                        Mem_Read    = 1;
-                        Mem_Write   = 0;
-                        Mem_to_Reg  = 1;
-                        Imm_Value[31:0] = {{21{Instruction_IF_ID[31]}}, Instruction_IF_ID[30:20]};
-                        cnn_en      = 1'b0;
-                    end
-                7'b0010011:         // I-type instructions (ADDI)
-                    begin 
-                        Reg_Write   = 1;
-                        ALU_Src     = 1;
-                        Mem_Read    = 0;
-                        Mem_Write   = 0;
-                        Mem_to_Reg  = 0;
-                        Imm_Value[31:0] = {{21{Instruction_IF_ID[31]}}, Instruction_IF_ID[30:20]};
-                        cnn_en      = 1'b0;
-                    end
-                7'b0100011:         // S-type instructions
-                    begin 
-                        Reg_Write   = 0;
-                        ALU_Src     = 1;
-                        Mem_Read    = 0;
-                        Mem_Write   = 1;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value[31:0] = {{21{Instruction_IF_ID[31]}}, Instruction_IF_ID[30:25], Instruction_IF_ID[11:7]};
-                        cnn_en      = 1'b0;
-                    end
-                7'b1100011:         // B-types instructions
-                    begin 
-                        Reg_Write   = 0;
-                        ALU_Src     = 0;
-                        Mem_Read    = 0;
-                        Mem_Write   = 0;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'b0;
-                    end
-                7'b1101111:         // J-type instructions
-                    begin 
-                        Reg_Write   = 1;
-                        ALU_Src     = 1'bx;
-                        Mem_Read    = 0;
-                        Mem_Write   = 0;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'b0;
-                    end
-                7'b1110011:         // ecall
-                    begin
-                        Reg_Write   = 1'bx;
-                        ALU_Src     = 1'bx;
-                        Mem_Read    = 1'bx;
-                        Mem_Write   = 1'b0;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'b0;
-                    end
-                7'b1111111:         // Convo
-                    begin
-                        Reg_Write   = 1'bx;
-                        ALU_Src     = 1'bx;
-                        Mem_Read    = 1'bx;
-                        Mem_Write   = 1'b0;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'b1;
-                    end
-                default:
-                    begin
-                        Reg_Write   = 1'bx;
-                        ALU_Src     = 1'bx;
-                        Mem_Read    = 1'bx;
-                        Mem_Write   = 1'bx;
-                        Mem_to_Reg  = 1'bx;
-                        Imm_Value   = 32'hxxxxxxxx;
-                        cnn_en      = 1'bx;
-                    end
-            endcase
-        end
-    end
+                7'b0110011: begin         // R-type
+                    Reg_Write = 1;
+                    case ({Funct7[5], Instr_Funct3})
+                        4'b0_000: ALU_Op = ALU_ADD;
+                        4'b1_000: ALU_Op = ALU_SUB;
+                        4'b0_001: ALU_Op = ALU_SLL;
+                        4'b0_010: ALU_Op = ALU_SLT;
+                        4'b0_011: ALU_Op = ALU_SLTU;
+                        4'b0_100: ALU_Op = ALU_XOR;
+                        4'b0_101: ALU_Op = ALU_SRL;
+                        4'b1_101: ALU_Op = ALU_SRA;
+                        4'b0_110: ALU_Op = ALU_OR;
+                        4'b0_111: ALU_Op = ALU_AND;
+                        default: begin
+                            Reg_Write = 0;
+                            ALU_Op = ALU_ADD;
+                        end
+                    endcase
+                end
 
-    // ALU_Op decode
-    always @(*) begin
-        if (Signal_Stall) begin
-            ALU_Op = 4'b0000;
-        end
+                7'b0010011: begin         // I-type ALU
+                    Reg_Write = 1;
+                    ALU_Src = 1;
+                    Imm_Value = {{20{Instruction_IF_ID[31]}}, Instruction_IF_ID[31:20]};
+                    case (Instr_Funct3)
+                        3'b000: ALU_Op = ALU_ADD;  // addi
+                        3'b010: ALU_Op = ALU_SLT;  // slti
+                        3'b011: ALU_Op = ALU_SLTU; // sltiu
+                        3'b100: ALU_Op = ALU_XOR;  // xori
+                        3'b110: ALU_Op = ALU_OR;   // ori
+                        3'b111: ALU_Op = ALU_AND;  // andi
+                        3'b001: begin              // slli
+                            ALU_Op = (Funct7 == 7'b0000000) ? ALU_SLL : ALU_ADD;
+                            Reg_Write = (Funct7 == 7'b0000000);
+                        end
+                        3'b101: begin              // srli/srai
+                            ALU_Op = Instruction_IF_ID[30] ? ALU_SRA : ALU_SRL;
+                            Reg_Write = (Funct7 == 7'b0000000) || (Funct7 == 7'b0100000);
+                        end
+                        default: begin
+                            Reg_Write = 0;
+                            ALU_Op = ALU_ADD;
+                        end
+                    endcase
+                end
 
-        else begin
-            casez (Control)
-                11'b0_000_0110011: ALU_Op = 4'b0000; //add
-                11'b1_000_0110011: ALU_Op = 4'b0001; //sub
-                11'b0_001_0110011: ALU_Op = 4'b0010; //sll
-                11'b0_101_0110011: ALU_Op = 4'b0011; //srl
-                11'b0_010_0110011: ALU_Op = 4'b0100; //slt
-                11'b?_000_0010011: ALU_Op = 4'b0000; //addi
-                11'b0_110_0110011: ALU_Op = 4'b0101; //or
-                11'b0_111_0110011: ALU_Op = 4'b0110; //and
-                11'b?_010_0000011: ALU_Op = 4'b0000; //lw
-                11'b?_010_0100011: ALU_Op = 4'b0000; //sw
-                11'b?_000_1100011: ALU_Op = 4'b0001; //beq
-                11'b?_100_1100011: ALU_Op = 4'b0001; //blt
-                11'b?_???_1101111: ALU_Op = 4'bxxxx; //jal
-                11'b0_000_1110011: ALU_Op = 4'bxxxx; //ecall
-                default: ALU_Op = 4'bxxxx;
+                7'b0000011: begin         // Loads
+                    Reg_Write = 1;
+                    ALU_Src = 1;
+                    Mem_Read = 1;
+                    Mem_to_Reg = 1;
+                    ALU_Op = ALU_ADD;
+                    Imm_Value = {{20{Instruction_IF_ID[31]}}, Instruction_IF_ID[31:20]};
+                    case (Instr_Funct3)
+                        3'b000, 3'b001, 3'b010, 3'b100, 3'b101: Reg_Write = 1;
+                        default: Reg_Write = 0;
+                    endcase
+                end
+
+                7'b0100011: begin         // Stores
+                    ALU_Src = 1;
+                    Mem_Write = 1;
+                    ALU_Op = ALU_ADD;
+                    Imm_Value = {{20{Instruction_IF_ID[31]}}, Instruction_IF_ID[31:25], Instruction_IF_ID[11:7]};
+                    case (Instr_Funct3)
+                        3'b000, 3'b001, 3'b010: Mem_Write = 1;
+                        default: Mem_Write = 0;
+                    endcase
+                end
+
+                7'b1100011: begin         // Branches
+                    ALU_Src = 0;
+                    ALU_Op = ALU_SUB;
+                    Imm_Value = {{19{Instruction_IF_ID[31]}}, Instruction_IF_ID[31], Instruction_IF_ID[7], Instruction_IF_ID[30:25], Instruction_IF_ID[11:8], 1'b0};
+                end
+
+                7'b1101111: begin         // JAL
+                    Reg_Write = 1;
+                    Imm_Value = {{11{Instruction_IF_ID[31]}}, Instruction_IF_ID[31], Instruction_IF_ID[19:12], Instruction_IF_ID[20], Instruction_IF_ID[30:21], 1'b0};
+                end
+
+                7'b1100111: begin         // JALR
+                    Reg_Write = (Instr_Funct3 == 3'b000);
+                    ALU_Src = 1;
+                    ALU_Op = ALU_ADD;
+                    Imm_Value = {{20{Instruction_IF_ID[31]}}, Instruction_IF_ID[31:20]};
+                end
+
+                7'b0110111: begin         // LUI
+                    Reg_Write = 1;
+                    ALU_Src = 1;
+                    ALU_Op = ALU_COPY_B;
+                    Imm_Value = {Instruction_IF_ID[31:12], 12'b0};
+                end
+
+                7'b0010111: begin         // AUIPC
+                    Reg_Write = 1;
+                    ALU_Src = 1;
+                    ALU_In1_PC = 1'b1;
+                    ALU_Op = ALU_ADD;
+                    Imm_Value = {Instruction_IF_ID[31:12], 12'b0};
+                end
+
+                7'b1110011: begin         // ECALL; EBREAK intentionally unsupported
+                    Reg_Write  = 0;
+                    Mem_Read   = 0;
+                    Mem_Write  = 0;
+                end
+
+                7'b1111111: begin         // Custom CNN trigger, unchanged
+                    cnn_en = 1'b1;
+                end
+
+                default: begin
+                    Reg_Write  = 0;
+                    ALU_Src    = 0;
+                    Mem_Read   = 0;
+                    Mem_Write  = 0;
+                    Mem_to_Reg = 0;
+                    cnn_en     = 1'b0;
+                    ALU_Op     = ALU_ADD;
+                    ALU_In1_PC = 1'b0;
+                    Imm_Value  = 32'h00000000;
+                end
             endcase
         end
     end
@@ -937,7 +1022,8 @@ module ID_EX_reg (
     input wire rst,
     input wire Signal_Flush,            // Pipeline flush
     input wire Signal_Branch_IF_ID,     // Branch
-    input wire Signal_Jump_IF_ID,       // Jump
+    input wire Signal_Jal_IF_ID,       // JAL
+    input wire Signal_Jalr_IF_ID,       // Register-indirect jump
     input wire Signal_Stall,            // Stall
     input wire [1:0] Addr_IF_ID,
     input wire [1:0] State_IF_ID,
@@ -947,6 +1033,8 @@ module ID_EX_reg (
     input wire Mem_Read,
     input wire Mem_Write,
     input wire Mem_to_Reg,
+    input wire ALU_In1_PC,
+    input wire [2:0] Funct3,
 
     // Data Signals
     input wire [4:0] rs1,
@@ -958,13 +1046,13 @@ module ID_EX_reg (
     input wire [31:0] RF_Out2,
     input wire [31:0] Jump_Addr_IF_ID,
     input wire [31:0] Return_Addr_IF_ID,
-    input wire Instruction_14_IF_ID,
     input wire [31:0] Imm_Value,
 
     // Outputs
     // Control Signals
     output reg Signal_Branch_ID_EX,
-    output reg Signal_Jump_ID_EX,
+    output reg Signal_Jal_ID_EX,
+    output reg Signal_Jalr_ID_EX,
     output reg [1:0] Addr_ID_EX,
     output reg [1:0] State_ID_EX,
     output reg [3:0] ALU_Op_ID_EX,
@@ -973,6 +1061,8 @@ module ID_EX_reg (
     output reg Mem_Read_ID_EX,
     output reg Mem_Write_ID_EX,
     output reg Mem_to_Reg_ID_EX,
+    output reg ALU_In1_PC_ID_EX,
+    output reg [2:0] Funct3_ID_EX,
 
     // Data Signals
     output reg [4:0] rs1_ID_EX,
@@ -983,7 +1073,6 @@ module ID_EX_reg (
     output reg [31:0] RF_Out1_ID_EX,
     output reg [31:0] RF_Out2_ID_EX,
     output reg [31:0] Return_Addr_ID_EX,
-    output reg Instruction_14_ID_EX,
     output reg [31:0] Imm_Value_ID_EX
 );
 
@@ -992,9 +1081,9 @@ module ID_EX_reg (
     //-------------------------------------------------------------
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst == 1) begin
-            // Control Signals
             Signal_Branch_ID_EX <= 0;
-            Signal_Jump_ID_EX   <= 0;
+            Signal_Jal_ID_EX   <= 0;
+            Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
             ALU_Op_ID_EX        <= 0;
@@ -1003,8 +1092,9 @@ module ID_EX_reg (
             Mem_Read_ID_EX      <= 0;
             Mem_Write_ID_EX     <= 0;
             Mem_to_Reg_ID_EX    <= 0;
+            ALU_In1_PC_ID_EX    <= 0;
+            Funct3_ID_EX        <= 0;
 
-            // Data Signals
             rs1_ID_EX           <= 0;
             rs2_ID_EX           <= 0;
             rd_ID_EX            <= 0;
@@ -1013,14 +1103,12 @@ module ID_EX_reg (
             RF_Out1_ID_EX       <= 0;
             RF_Out2_ID_EX       <= 0;
             Return_Addr_ID_EX   <= 0;
-            Instruction_14_ID_EX<= 0;
             Imm_Value_ID_EX     <= 0;
         end
-
         else if (Signal_Flush==1) begin
-            // Control Signals
             Signal_Branch_ID_EX <= 0;
-            Signal_Jump_ID_EX   <= 0;
+            Signal_Jal_ID_EX   <= 0;
+            Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
             ALU_Op_ID_EX        <= 0;
@@ -1029,8 +1117,9 @@ module ID_EX_reg (
             Mem_Read_ID_EX      <= 0;
             Mem_Write_ID_EX     <= 0;
             Mem_to_Reg_ID_EX    <= 0;
+            ALU_In1_PC_ID_EX    <= 0;
+            Funct3_ID_EX        <= 0;
 
-            // Data Signals
             rs1_ID_EX           <= 0;
             rs2_ID_EX           <= 0;
             rd_ID_EX            <= 0;
@@ -1039,14 +1128,12 @@ module ID_EX_reg (
             RF_Out1_ID_EX       <= 0;
             RF_Out2_ID_EX       <= 0;
             Return_Addr_ID_EX   <= 0;
-            Instruction_14_ID_EX<= 0;
             Imm_Value_ID_EX     <= 0;
         end
-
         else if (Signal_Stall==1) begin
-            // Control Signals
             Signal_Branch_ID_EX <= 0;
-            Signal_Jump_ID_EX   <= 0;
+            Signal_Jal_ID_EX   <= 0;
+            Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
             ALU_Op_ID_EX        <= 0;
@@ -1055,8 +1142,9 @@ module ID_EX_reg (
             Mem_Read_ID_EX      <= 0;
             Mem_Write_ID_EX     <= 0;
             Mem_to_Reg_ID_EX    <= 0;
+            ALU_In1_PC_ID_EX    <= 0;
+            Funct3_ID_EX        <= 0;
 
-            // Data Signals
             rs1_ID_EX           <= rs1_ID_EX;
             rs2_ID_EX           <= rs2_ID_EX;
             rd_ID_EX            <= rd_ID_EX;
@@ -1065,14 +1153,12 @@ module ID_EX_reg (
             RF_Out1_ID_EX       <= RF_Out1_ID_EX;
             RF_Out2_ID_EX       <= RF_Out2_ID_EX;
             Return_Addr_ID_EX   <= Return_Addr_ID_EX;
-            Instruction_14_ID_EX<= Instruction_14_ID_EX;
             Imm_Value_ID_EX     <= Imm_Value_ID_EX;
         end
-        
         else begin
-            // Control Signals
             Signal_Branch_ID_EX <= Signal_Branch_IF_ID;
-            Signal_Jump_ID_EX   <= Signal_Jump_IF_ID;
+            Signal_Jal_ID_EX   <= Signal_Jal_IF_ID;
+            Signal_Jalr_ID_EX   <= Signal_Jalr_IF_ID;
             Addr_ID_EX          <= Addr_IF_ID;
             State_ID_EX         <= State_IF_ID;
             ALU_Op_ID_EX        <= ALU_Op;
@@ -1081,8 +1167,9 @@ module ID_EX_reg (
             Mem_Read_ID_EX      <= Mem_Read;
             Mem_Write_ID_EX     <= Mem_Write;
             Mem_to_Reg_ID_EX    <= Mem_to_Reg;
+            ALU_In1_PC_ID_EX    <= ALU_In1_PC;
+            Funct3_ID_EX        <= Funct3;
 
-            // Data Signals
             rs1_ID_EX           <= rs1;
             rs2_ID_EX           <= rs2;
             rd_ID_EX            <= rd;
@@ -1091,7 +1178,6 @@ module ID_EX_reg (
             RF_Out1_ID_EX       <= RF_Out1;
             RF_Out2_ID_EX       <= RF_Out2;
             Return_Addr_ID_EX   <= Return_Addr_IF_ID;
-            Instruction_14_ID_EX<= Instruction_14_IF_ID;
             Imm_Value_ID_EX     <= Imm_Value;
         end
     end
@@ -1104,63 +1190,82 @@ module ALU (
     input wire [31:0] ALU_In1_ID_EX, ALU_In2_ID_EX,
     input wire [1:0] Forward_A, Forward_B,
     input wire ALU_Src_ID_EX,
+    input wire ALU_In1_PC_ID_EX,
+    input wire [2:0] Funct3_ID_EX,
+    input wire [31:0] PC_ID_EX,
     input wire [31:0] ALU_Result_EX_MEM, Reg_Write_Data_MEM_WB,
     input wire [31:0] Imm_Value_ID_EX,
 
     // Outputs
-    output reg Zero_Flag, Sign_Flag,
+    output reg Branch_Taken,
+    output wire [31:0] Store_Data,
     output reg [31:0] ALU_Result
 );
 
     //-------------------------------------------------------------
     // Registers / Wires
     //-------------------------------------------------------------
+    wire [31:0] Forwarded_In1;
+    wire [31:0] Forwarded_In2;
+    wire [31:0] ALU_In1;
+    wire [31:0] ALU_In2;
 
-    wire [31:0] ALU_In1, ALU_In2;
+    localparam [3:0] ALU_ADD  = 4'h0;
+    localparam [3:0] ALU_SUB  = 4'h1;
+    localparam [3:0] ALU_SLL  = 4'h2;
+    localparam [3:0] ALU_SRL  = 4'h3;
+    localparam [3:0] ALU_SLT  = 4'h4;
+    localparam [3:0] ALU_OR   = 4'h5;
+    localparam [3:0] ALU_AND  = 4'h6;
+    localparam [3:0] ALU_XOR  = 4'h7;
+    localparam [3:0] ALU_SRA  = 4'h8;
+    localparam [3:0] ALU_SLTU = 4'h9;
+    localparam [3:0] ALU_COPY_B = 4'hA;
     
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
+    assign Forwarded_In1 = (Forward_A == 2'b00) ? ALU_In1_ID_EX :
+                           (Forward_A == 2'b01) ? Reg_Write_Data_MEM_WB :
+                           (Forward_A == 2'b10) ? ALU_Result_EX_MEM :
+                           ALU_In1_ID_EX;
 
-    assign ALU_In1 = (Forward_A == 2'b00) ? ALU_In1_ID_EX :
-                     (Forward_A == 2'b01) ? Reg_Write_Data_MEM_WB :
-                     (Forward_A == 2'b10) ? ALU_Result_EX_MEM :
-                     ALU_In1_ID_EX;
+    assign Forwarded_In2 = (Forward_B == 2'b00) ? ALU_In2_ID_EX :
+                           (Forward_B == 2'b01) ? Reg_Write_Data_MEM_WB :
+                           (Forward_B == 2'b10) ? ALU_Result_EX_MEM :
+                           ALU_In2_ID_EX;
 
-    assign ALU_In2 = ALU_Src_ID_EX ? Imm_Value_ID_EX :((Forward_B == 2'b00) ? ALU_In2_ID_EX :
-                                                       (Forward_B == 2'b01) ? Reg_Write_Data_MEM_WB :
-                                                       (Forward_B == 2'b10) ? ALU_Result_EX_MEM : ALU_In2_ID_EX);
-
-     
+    assign ALU_In1 = ALU_In1_PC_ID_EX ? PC_ID_EX : Forwarded_In1;
+    assign ALU_In2 = ALU_Src_ID_EX ? Imm_Value_ID_EX : Forwarded_In2;
+    assign Store_Data = Forwarded_In2;
 
     always @(*) begin
         case (ALU_Op_ID_EX)
-            4'b0000: ALU_Result = ALU_In1 + ALU_In2;              //add, addi, lw, sw
-            4'b0001: ALU_Result = ALU_In1 - ALU_In2;              //sub, beq, blt
-            4'b0010: ALU_Result = ALU_In1 << ALU_In2[4:0];        //sll
-            4'b0011: ALU_Result = ALU_In1 >> ALU_In2[4:0];        //srl
-            4'b0100: ALU_Result = (ALU_In1 < ALU_In2) ? 1 : 0;    //slt
-            4'b0101: ALU_Result = ALU_In1 | ALU_In2;              //or
-            4'b0110: ALU_Result = ALU_In1 & ALU_In2;              //and
-            default: ALU_Result = 32'h00000000;
+            ALU_ADD:    ALU_Result = ALU_In1 + ALU_In2;
+            ALU_SUB:    ALU_Result = ALU_In1 - ALU_In2;
+            ALU_SLL:    ALU_Result = ALU_In1 << ALU_In2[4:0];
+            ALU_SRL:    ALU_Result = ALU_In1 >> ALU_In2[4:0];
+            ALU_SLT:    ALU_Result = ($signed(ALU_In1) < $signed(ALU_In2)) ? 32'd1 : 32'd0;
+            ALU_OR:     ALU_Result = ALU_In1 | ALU_In2;
+            ALU_AND:    ALU_Result = ALU_In1 & ALU_In2;
+            ALU_XOR:    ALU_Result = ALU_In1 ^ ALU_In2;
+            ALU_SRA:    ALU_Result = $signed(ALU_In1) >>> ALU_In2[4:0];
+            ALU_SLTU:   ALU_Result = (ALU_In1 < ALU_In2) ? 32'd1 : 32'd0;
+            ALU_COPY_B: ALU_Result = ALU_In2;
+            default:    ALU_Result = 32'h00000000;
         endcase
     end
 
-    always @(ALU_Result) begin
-        if (ALU_Result==0) begin
-            Zero_Flag = 1;
-            Sign_Flag = 0;
-        end
-
-        else if (ALU_Result[31]==1) begin
-            Zero_Flag = 0;
-            Sign_Flag = 1;
-        end
-
-        else begin 
-            Zero_Flag = 0;
-            Sign_Flag = 0;
-        end
+    always @(*) begin
+        case (Funct3_ID_EX)
+            3'b000: Branch_Taken = (Forwarded_In1 == Forwarded_In2);                         // beq
+            3'b001: Branch_Taken = (Forwarded_In1 != Forwarded_In2);                         // bne
+            3'b100: Branch_Taken = ($signed(Forwarded_In1) < $signed(Forwarded_In2));         // blt
+            3'b101: Branch_Taken = ($signed(Forwarded_In1) >= $signed(Forwarded_In2));        // bge
+            3'b110: Branch_Taken = (Forwarded_In1 < Forwarded_In2);                          // bltu
+            3'b111: Branch_Taken = (Forwarded_In1 >= Forwarded_In2);                         // bgeu
+            default: Branch_Taken = 1'b0;
+        endcase
     end
 endmodule 
 
@@ -1169,7 +1274,8 @@ module EX_MEM_Reg (
     // Control Signals
     input wire clk_50MHZ,
     input wire rst,
-    input wire Signal_Jump_ID_EX,
+    input wire Signal_Jal_ID_EX,
+    input wire Signal_Jalr_ID_EX,
     input wire Reg_Write_ID_EX,
     input wire Mem_Read_ID_EX,
     input wire Mem_Write_ID_EX,
@@ -1180,10 +1286,12 @@ module EX_MEM_Reg (
     input wire [31:0] ALU_Result,
     input wire [31:0] RF_Out2_ID_EX,
     input wire [31:0] Return_Addr_ID_EX,
+    input wire [2:0] Funct3_ID_EX,
 
     // Outputs
     // Control Signals
-    output reg Signal_Jump_EX_MEM,
+    output reg Signal_Jal_EX_MEM,
+    output reg Signal_Jalr_EX_MEM,
     output reg Reg_Write_EX_MEM,
     output reg Mem_Read_EX_MEM,
     output reg Mem_Write_EX_MEM,
@@ -1193,7 +1301,8 @@ module EX_MEM_Reg (
     output reg [4:0] rd_EX_MEM,
     output reg [31:0] ALU_Result_EX_MEM,
     output reg [31:0] RF_Out2_EX_MEM,
-    output reg [31:0] Return_Addr_EX_MEM
+    output reg [31:0] Return_Addr_EX_MEM,
+    output reg [2:0] Funct3_EX_MEM
 );
     
     //-------------------------------------------------------------
@@ -1201,35 +1310,32 @@ module EX_MEM_Reg (
     //-------------------------------------------------------------
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst==1) begin
-
-            // Control Signals
-            Signal_Jump_EX_MEM  <= 0;
+            Signal_Jal_EX_MEM  <= 0;
+            Signal_Jalr_EX_MEM  <= 0;
             Reg_Write_EX_MEM    <= 0;
             Mem_Read_EX_MEM     <= 0;
             Mem_Write_EX_MEM    <= 0;
             Mem_to_Reg_EX_MEM   <= 0;
 
-            // Data Signals
             rd_EX_MEM           <= 0;
             ALU_Result_EX_MEM   <= 0;
             RF_Out2_EX_MEM      <= 0;
             Return_Addr_EX_MEM  <= 0;
+            Funct3_EX_MEM       <= 0;
         end
-
         else begin
-
-            // Control Signals
-            Signal_Jump_EX_MEM  <= Signal_Jump_ID_EX;
+            Signal_Jal_EX_MEM  <= Signal_Jal_ID_EX;
+            Signal_Jalr_EX_MEM  <= Signal_Jalr_ID_EX;
             Reg_Write_EX_MEM    <= Reg_Write_ID_EX;
             Mem_Read_EX_MEM     <= Mem_Read_ID_EX;
             Mem_Write_EX_MEM    <= Mem_Write_ID_EX;
             Mem_to_Reg_EX_MEM   <= Mem_to_Reg_ID_EX;
 
-            // Data Signals
             rd_EX_MEM           <= rd_ID_EX;
             ALU_Result_EX_MEM   <= ALU_Result;
             RF_Out2_EX_MEM      <= RF_Out2_ID_EX;
             Return_Addr_EX_MEM  <= Return_Addr_ID_EX;
+            Funct3_EX_MEM       <= Funct3_ID_EX;
         end
     end
 
@@ -1238,19 +1344,9 @@ endmodule
 // ================================================================
 // Data_Memory - 4KB shared CPU/CNN data RAM
 //
-// The CPU needs a 32-bit word port while the CNN reads image bytes
-// from the last 1KB. To keep this synthesizable as block RAM in
-// Vivado, the 32-bit memory is split into four 8-bit byte lanes:
-//   data_b0 stores byte address 4*i + 0
-//   data_b1 stores byte address 4*i + 1
-//   data_b2 stores byte address 4*i + 2
-//   data_b3 stores byte address 4*i + 3
-//
-// The CPU accesses all four lanes at the same word address and the
-// outputs are concatenated back into one 32-bit word. The CNN uses
-// cnn_mem_addr[1:0] to select one byte lane and cnn_mem_addr[11:2]
-// as the lane word address. A same-word CPU/CNN conflict disables
-// the CNN port for that cycle, giving CPU accesses priority.
+// The CPU port remains split into four 8-bit true dual-port RAMs so
+// Vivado can infer block RAM. CPU funct3 selects byte/halfword/word
+// loads and per-lane stores; the CNN port retains byte addressing.
 // ================================================================
 module Data_Memory #(
     parameter DATA_B0_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b0.mem",
@@ -1262,27 +1358,20 @@ module Data_Memory #(
     parameter CNN_B2_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b2.mem",
     parameter CNN_B3_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b3.mem"
 ) (
-    // Inputs
     input wire clk_50MHZ,
     input wire Mem_Write_EX_MEM,
     input wire Mem_Read_EX_MEM,
-
     input wire [31:0] Mem_Write_Data,
     input wire [31:0] Mem_Address,
-
-    // CNN data-memory port. cnn.mem contents are mapped to the last 1KB.
+    input wire [2:0] Mem_Funct3_EX_MEM,
     input wire cnn_mem_read_en,
     input wire cnn_mem_write_en,
     input wire [11:0] cnn_mem_addr,
     input wire [7:0] cnn_mem_write_data,
-
-    // Outputs
     output wire [7:0] cnn_mem_read_data,
-    output wire [31:0] Mem_Read_Data
+    output wire [31:0] Mem_Read_Data,
+    output wire [31:0] Mem_LED_out
 );
-    //-------------------------------------------------------------
-    // Registers / Wires
-    //-------------------------------------------------------------
     wire [9:0] cpu_word_addr;
     wire [9:0] cnn_word_addr;
     wire [1:0] cnn_byte_sel;
@@ -1291,14 +1380,13 @@ module Data_Memory #(
     wire cpu_cnn_addr_conflict;
     wire cnn_port_en;
     wire [3:0] cnn_byte_we;
-    wire [7:0] cpu_dout0;
-    wire [7:0] cpu_dout1;
-    wire [7:0] cpu_dout2;
-    wire [7:0] cpu_dout3;
-    wire [7:0] cnn_dout0;
-    wire [7:0] cnn_dout1;
-    wire [7:0] cnn_dout2;
-    wire [7:0] cnn_dout3;
+    reg [3:0] cpu_byte_we;
+    reg [7:0] cpu_din0, cpu_din1, cpu_din2, cpu_din3;
+    wire [7:0] cpu_dout0, cpu_dout1, cpu_dout2, cpu_dout3;
+    wire [7:0] cnn_dout0, cnn_dout1, cnn_dout2, cnn_dout3;
+    wire [7:0] load_byte;
+    wire [15:0] load_half;
+    reg [31:0] cpu_load_data;
 
     assign cpu_word_addr = Mem_Address[11:2];
     assign cnn_word_addr = cnn_mem_addr[11:2];
@@ -1311,96 +1399,86 @@ module Data_Memory #(
                          {cnn_byte_sel == 2'd3, cnn_byte_sel == 2'd2,
                           cnn_byte_sel == 2'd1, cnn_byte_sel == 2'd0};
 
-    assign Mem_Read_Data = Mem_Read_EX_MEM ? {cpu_dout3, cpu_dout2, cpu_dout1, cpu_dout0} : 32'd0;
+    assign load_byte = (Mem_Address[1:0] == 2'd0) ? cpu_dout0 :
+                       (Mem_Address[1:0] == 2'd1) ? cpu_dout1 :
+                       (Mem_Address[1:0] == 2'd2) ? cpu_dout2 : cpu_dout3;
+    assign load_half = Mem_Address[1] ? {cpu_dout3, cpu_dout2} : {cpu_dout1, cpu_dout0};
+    assign Mem_Read_Data = Mem_Read_EX_MEM ? cpu_load_data : 32'd0;
     assign cnn_mem_read_data = (cnn_byte_sel == 2'd0) ? cnn_dout0 :
                                (cnn_byte_sel == 2'd1) ? cnn_dout1 :
                                (cnn_byte_sel == 2'd2) ? cnn_dout2 : cnn_dout3;
+    assign Mem_LED_out = 32'd0;
 
-    Byte_TDP_RAM #(
-        .DATA_FILE(DATA_B0_FILE),
-        .CNN_FILE(CNN_B0_FILE)
-    ) data_b0 (
-        .clk(clk_50MHZ),
-        .ena(cpu_access),
-        .wea(Mem_Write_EX_MEM),
-        .addra(cpu_word_addr),
-        .dina(Mem_Write_Data[7:0]),
-        .douta(cpu_dout0),
-        .enb(cnn_port_en),
-        .web(cnn_byte_we[0]),
-        .addrb(cnn_word_addr),
-        .dinb(cnn_mem_write_data),
-        .doutb(cnn_dout0)
+    always @(*) begin
+        cpu_byte_we = 4'b0000;
+        cpu_din0 = Mem_Write_Data[7:0];
+        cpu_din1 = Mem_Write_Data[15:8];
+        cpu_din2 = Mem_Write_Data[23:16];
+        cpu_din3 = Mem_Write_Data[31:24];
+
+        if (Mem_Write_EX_MEM) begin
+            case (Mem_Funct3_EX_MEM)
+                3'b000: begin // sb
+                    cpu_byte_we = 4'b0001 << Mem_Address[1:0];
+                    cpu_din0 = Mem_Write_Data[7:0];
+                    cpu_din1 = Mem_Write_Data[7:0];
+                    cpu_din2 = Mem_Write_Data[7:0];
+                    cpu_din3 = Mem_Write_Data[7:0];
+                end
+                3'b001: begin // sh, naturally aligned
+                    if (Mem_Address[1]) begin
+                        cpu_byte_we = 4'b1100;
+                        cpu_din2 = Mem_Write_Data[7:0];
+                        cpu_din3 = Mem_Write_Data[15:8];
+                    end else begin
+                        cpu_byte_we = 4'b0011;
+                    end
+                end
+                3'b010: cpu_byte_we = 4'b1111; // sw, naturally aligned
+                default: cpu_byte_we = 4'b0000;
+            endcase
+        end
+    end
+
+    always @(*) begin
+        case (Mem_Funct3_EX_MEM)
+            3'b000: cpu_load_data = {{24{load_byte[7]}}, load_byte}; // lb
+            3'b001: cpu_load_data = {{16{load_half[15]}}, load_half}; // lh
+            3'b010: cpu_load_data = {cpu_dout3, cpu_dout2, cpu_dout1, cpu_dout0}; // lw
+            3'b100: cpu_load_data = {24'd0, load_byte}; // lbu
+            3'b101: cpu_load_data = {16'd0, load_half}; // lhu
+            default: cpu_load_data = 32'd0;
+        endcase
+    end
+
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B0_FILE), .CNN_FILE(CNN_B0_FILE)) data_b0 (
+        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[0]), .addra(cpu_word_addr),
+        .dina(cpu_din0), .douta(cpu_dout0), .enb(cnn_port_en), .web(cnn_byte_we[0]),
+        .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout0)
     );
 
-    Byte_TDP_RAM #(
-        .DATA_FILE(DATA_B1_FILE),
-        .CNN_FILE(CNN_B1_FILE)
-    ) data_b1 (
-        .clk(clk_50MHZ),
-        .ena(cpu_access),
-        .wea(Mem_Write_EX_MEM),
-        .addra(cpu_word_addr),
-        .dina(Mem_Write_Data[15:8]),
-        .douta(cpu_dout1),
-        .enb(cnn_port_en),
-        .web(cnn_byte_we[1]),
-        .addrb(cnn_word_addr),
-        .dinb(cnn_mem_write_data),
-        .doutb(cnn_dout1)
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B1_FILE), .CNN_FILE(CNN_B1_FILE)) data_b1 (
+        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[1]), .addra(cpu_word_addr),
+        .dina(cpu_din1), .douta(cpu_dout1), .enb(cnn_port_en), .web(cnn_byte_we[1]),
+        .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout1)
     );
 
-    Byte_TDP_RAM #(
-        .DATA_FILE(DATA_B2_FILE),
-        .CNN_FILE(CNN_B2_FILE)
-    ) data_b2 (
-        .clk(clk_50MHZ),
-        .ena(cpu_access),
-        .wea(Mem_Write_EX_MEM),
-        .addra(cpu_word_addr),
-        .dina(Mem_Write_Data[23:16]),
-        .douta(cpu_dout2),
-        .enb(cnn_port_en),
-        .web(cnn_byte_we[2]),
-        .addrb(cnn_word_addr),
-        .dinb(cnn_mem_write_data),
-        .doutb(cnn_dout2)
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B2_FILE), .CNN_FILE(CNN_B2_FILE)) data_b2 (
+        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[2]), .addra(cpu_word_addr),
+        .dina(cpu_din2), .douta(cpu_dout2), .enb(cnn_port_en), .web(cnn_byte_we[2]),
+        .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout2)
     );
 
-    Byte_TDP_RAM #(
-        .DATA_FILE(DATA_B3_FILE),
-        .CNN_FILE(CNN_B3_FILE)
-    ) data_b3 (
-        .clk(clk_50MHZ),
-        .ena(cpu_access),
-        .wea(Mem_Write_EX_MEM),
-        .addra(cpu_word_addr),
-        .dina(Mem_Write_Data[31:24]),
-        .douta(cpu_dout3),
-        .enb(cnn_port_en),
-        .web(cnn_byte_we[3]),
-        .addrb(cnn_word_addr),
-        .dinb(cnn_mem_write_data),
-        .doutb(cnn_dout3)
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B3_FILE), .CNN_FILE(CNN_B3_FILE)) data_b3 (
+        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[3]), .addra(cpu_word_addr),
+        .dina(cpu_din3), .douta(cpu_dout3), .enb(cnn_port_en), .web(cnn_byte_we[3]),
+        .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout3)
     );
 
 endmodule
 
 // ================================================================
 // Byte_TDP_RAM - Vivado-friendly true dual-port RAM template
-//
-// Each byte lane is a simple 1024x8 true dual-port RAM. Both ports
-// have the same width, synchronous reads, optional writes, and direct
-// $readmemh initialization into the actual RAM array. This matches
-// the RAM inference patterns Vivado can map to block RAM.
-//
-// Earlier versions tried to infer one packed 1024x32 RAM and let the
-// CNN port write dynamic part-selects such as mem[addr][7:0]. Vivado
-// rejected that as an unsupported RAM template. Another version used
-// an init_mem array and copied it into byte lanes with variable-index
-// assignments in an initial block; Vivado ignored those non-constant
-// initialization assignments. Splitting the memory into explicit
-// byte-lane RAMs avoids both unsupported patterns.
 // ================================================================
 module Byte_TDP_RAM #(
     parameter DATA_FILE = "",
@@ -1421,9 +1499,7 @@ module Byte_TDP_RAM #(
     localparam DATA_MEM_WORDS = 1024;
     localparam CPU_INIT_LAST  = 767;
     localparam CNN_INIT_BASE  = 768;
-
     (* ram_style = "block" *) reg [7:0] ram [0:DATA_MEM_WORDS-1];
-
     integer i;
 
     initial begin
@@ -1455,7 +1531,8 @@ module MEM_WB_Reg (
     // Control Signals
     input wire clk_50MHZ,
     input wire rst,
-    input wire Signal_Jump_EX_MEM,
+    input wire Signal_Jal_EX_MEM,
+    input wire Signal_Jalr_EX_MEM,
     input wire Reg_Write_EX_MEM,
     input wire Mem_to_Reg_EX_MEM,
 
@@ -1467,7 +1544,8 @@ module MEM_WB_Reg (
 
     // Outputs
     // Control Signals
-    output reg Signal_Jump_MEM_WB,
+    output reg Signal_Jal_MEM_WB,
+    output reg Signal_Jalr_MEM_WB,
     output reg Reg_Write_MEM_WB,
     output reg Mem_to_Reg_MEM_WB,
 
@@ -1483,27 +1561,22 @@ module MEM_WB_Reg (
     //-------------------------------------------------------------
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst==1) begin
-
-            // Control Signals
-            Signal_Jump_MEM_WB  <= 0;
+            Signal_Jal_MEM_WB  <= 0;
+            Signal_Jalr_MEM_WB  <= 0;
             Reg_Write_MEM_WB    <= 0;
             Mem_to_Reg_MEM_WB   <= 0;
 
-            // Data Signals
             rd_MEM_WB           <= 0;
             ALU_Result_MEM_WB   <= 0;
             Mem_Read_Data_MEM_WB<= 0;
             Return_Addr_MEM_WB  <= 0;
         end
-
         else begin
-            
-            // Control Signals
-            Signal_Jump_MEM_WB  <= Signal_Jump_EX_MEM;
+            Signal_Jal_MEM_WB  <= Signal_Jal_EX_MEM;
+            Signal_Jalr_MEM_WB  <= Signal_Jalr_EX_MEM;
             Reg_Write_MEM_WB    <= Reg_Write_EX_MEM;
             Mem_to_Reg_MEM_WB   <= Mem_to_Reg_EX_MEM;
 
-            // Data Signals
             rd_MEM_WB           <= rd_EX_MEM;
             ALU_Result_MEM_WB   <= ALU_Result_EX_MEM;
             Mem_Read_Data_MEM_WB<= Mem_Read_Data;
@@ -1618,6 +1691,7 @@ endmodule
 module Branch_Predictor (
     // Inputs
     input wire Outcome,
+    input wire Signal_Branch_ID_EX,
     input wire [1:0] State_ID_EX,
 
     // Outputs
@@ -1632,7 +1706,7 @@ module Branch_Predictor (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    assign Signal_Flush = State_ID_EX[1] ^ Outcome; // Assigning Flush
+    assign Signal_Flush = Signal_Branch_ID_EX && (State_ID_EX[1] ^ Outcome);
     
     always @(*) begin
         case(State_ID_EX)
@@ -1640,6 +1714,7 @@ module Branch_Predictor (
         s1: Entry = Outcome ? s2 : s0;
         s2: Entry = Outcome ? s3 : s1;
         s3: Entry = Outcome ? s3 : s2;
+        default: Entry = s0;
         endcase
     end
 
@@ -1649,7 +1724,8 @@ endmodule
 module Writeback_Unit (
     // inputs
     input wire Mem_to_Reg_MEM_WB,
-    input wire Signal_Jump_MEM_WB,
+    input wire Signal_Jal_MEM_WB,
+    input wire Signal_Jalr_MEM_WB,
     input wire [31:0] ALU_Result_MEM_WB,
     input wire [31:0] Mem_Read_Data_MEM_WB,
     input wire [31:0] Return_Addr_MEM_WB,
@@ -1662,7 +1738,8 @@ module Writeback_Unit (
     // Functionality
     //-------------------------------------------------------------
     always @(*) begin
-        Reg_Write_Data = Signal_Jump_MEM_WB ? Return_Addr_MEM_WB : (Mem_to_Reg_MEM_WB ? Mem_Read_Data_MEM_WB : ALU_Result_MEM_WB);
+        Reg_Write_Data = (Signal_Jal_MEM_WB || Signal_Jalr_MEM_WB) ? Return_Addr_MEM_WB :
+                         (Mem_to_Reg_MEM_WB ? Mem_Read_Data_MEM_WB : ALU_Result_MEM_WB);
     end
     
 endmodule
