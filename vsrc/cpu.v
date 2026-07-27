@@ -18,10 +18,14 @@ module cpu (
     wire rst;
     assign rst = ~sysrst;
     
-    // Clocks
+    // ================================================================
+    // Temporarily unify the system clock to avoid clock domain crossing (CDC) issues.
+    // Now in practice, these 2 clocks are both connected to a 50MHz external clock.
+    // ================================================================
     wire clk_50MHZ;
     wire clk_20MHZ;
-    // wire locked;
+    assign clk_50MHZ = clk;
+    assign clk_20MHZ = clk;
     
     // Flags
     wire Zero_Flag;
@@ -147,8 +151,8 @@ module cpu (
     // Module Instantiation
     //-------------------------------------------------------------
 
-    // Mux takes in PC+4, Exception Cycle intialization address or Branch Address
     
+    /*
     CLK_Gen clk_generation (
         // Clock out ports
         .clk_50MHZ(clk_50MHZ),     // output clk_50MHZ
@@ -159,8 +163,9 @@ module cpu (
         // Clock in ports
         .clk_in(clk)      // input clk_in
     );
+    */
 
-
+    // Mux takes in PC+4, Exception Cycle intialization address or Branch Address
     PC_Module m1 (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
@@ -450,6 +455,7 @@ endmodule
 // Output: clk_50MHZ = 50 MHz (div-by-2)
 //         clk_20MHZ = 20 MHz (div-by-5)
 // ================================================================
+/*
 module CLK_Gen (
     input clk_in,
     input rst,
@@ -485,6 +491,7 @@ module CLK_Gen (
     end
 
 endmodule
+*/
 
 
 module PC_Module (
@@ -1715,6 +1722,9 @@ module cnn_core (
     // ================================================================
     (* rom_style = "block" *) reg [7:0] image_rom [0:1023];
     (* rom_style = "block" *) reg signed [15:0] kernel1_rom [0:8];
+    // Vivado synth can reject $readmemh when an initialized memory is
+    // only read with a literal index like rom[0]. Keep the single-entry
+    // memories as [0:0], but read them through constant address wires.
     (* rom_style = "block" *) reg signed [31:0] kernel1_bias_rom [0:0];
     (* rom_style = "block" *) reg signed [15:0] kernel2_rom [0:8];
     (* rom_style = "block" *) reg signed [31:0] kernel2_bias_rom [0:0];
@@ -1726,6 +1736,8 @@ module cnn_core (
     reg [9:0] image_addr;
     reg [3:0] kernel1_addr;
     reg [3:0] kernel2_addr;
+    wire kernel1_bias_addr;
+    wire kernel2_bias_addr;
     reg [7:0] pool1_addr;
     reg [5:0] pool2_addr;
     reg [8:0] fc_weight_addr;
@@ -1740,6 +1752,9 @@ module cnn_core (
     reg signed [31:0] pool2_dout;
     reg signed [15:0] fc_weight_dout;
     reg signed [31:0] fc_bias_dout;
+
+    assign kernel1_bias_addr = 1'b0;
+    assign kernel2_bias_addr = 1'b0;
 
     reg [4:0] c1_row;
     reg [4:0] c1_col;
@@ -1860,9 +1875,9 @@ module cnn_core (
     always @(posedge clk_20MHZ) begin
         image_dout <= image_rom[image_addr];
         kernel1_dout <= kernel1_rom[kernel1_addr];
-        kernel1_bias_dout <= kernel1_bias_rom[0];
+        kernel1_bias_dout <= kernel1_bias_rom[kernel1_bias_addr];
         kernel2_dout <= kernel2_rom[kernel2_addr];
-        kernel2_bias_dout <= kernel2_bias_rom[0];
+        kernel2_bias_dout <= kernel2_bias_rom[kernel2_bias_addr];
         pool1_dout <= pool1_mem[pool1_addr];
         pool2_dout <= pool2_mem[pool2_addr];
         fc_weight_dout <= fc_weights_rom[fc_weight_addr];
@@ -1888,9 +1903,18 @@ module cnn_core (
     end
 
     // ================================================================
-    // FSM for CNN processing
-    // Given that the inference process is not an actual pipeline, 
-    // we can use an FSM to control a sequential operation instead of a parallel one.
+    // FSM for sequential CNN inference with one shared MAC.
+    // Flow:
+    //   IDLE waits for cnn_en_int.
+    //   C1_SETUP/WAIT/ACCUM/STORE scans the 30x30 conv1 outputs;
+    //   every 2x2 group is max-pooled and written to pool1_mem.
+    //   C2_SETUP/WAIT/ACCUM/STORE scans the 13x13 conv2 outputs;
+    //   valid 2x2 groups are max-pooled and written to pool2_mem.
+    //   FC_SETUP/WAIT/ACCUM reuses the MAC for each class score row.
+    //   ARGMAX_INIT/SCAN selects the largest class_score value.
+    //   DONE holds predicted_class_LED until reset or the next run.
+    // Each WAIT state gives the synchronous ROM/RAM read one clock cycle
+    // before the ACCUM state consumes the registered data.
     // ================================================================
     always @(posedge clk_20MHZ or posedge rst) begin
         if (rst) begin

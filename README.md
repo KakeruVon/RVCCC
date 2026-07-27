@@ -1,11 +1,11 @@
 # RVCCC - RISC-V Core Controlled CNN accelerator
-An SoC Project on FPGA featuring a RISC-V CPU core with a CNN accelerating module. Successfully implemented on Zynq-7020. Got the original project structure from [`RISC-V-Core-with-Integrated-CNN-Accelerator`](https://github.com/dev-the-desai/RISC-V-Core-with-Integrated-CNN-Accelerator) by `dev-the-desai`, and it has been enriched in multiple ways.
+An **SoC** Project on FPGA featuring a **RISC-V CPU** core with a **CNN accelerating module**. Successfully implemented on **Zynq-7020**. Got the original project structure from [`RISC-V-Core-with-Integrated-CNN-Accelerator`](https://github.com/dev-the-desai/RISC-V-Core-with-Integrated-CNN-Accelerator) by `dev-the-desai`, and it has been enriched in multiple ways.
 
-This project is now developing under a progressive pattern. Currently, I finished the first version, which is barely a CPU and an accelerating module put together. In further development, the CPU will be a control center of the whole process, arranging CNN module, bus, as well as communication with the host computer.
+This project is now developing under a progressive pattern. Currently, I finished the first version `v1`, which is barely a CPU and an accelerating module put together. In further development, the CPU will be a control center of the whole process, arranging CNN module, bus, as well as communication with the host computer.
 
-The purpose of this project is to accelerate neural network inferencing with hardware logic. I built a CNN with 2 convolution layers and 1 fully connected layer, trained with MNIST dataset, and implemented the model on FPGA to recognize the numbers in MNIST test images.
+The purpose of this project is to accelerate neural network inference with hardware logic. I built a CNN model with 2 convolution+pooling+ReLU layers and 1 fully connected layer, trained with MNIST dataset, and implemented the model on FPGA to recognize the numbers in MNIST test images.
 
-In early development, I implemented the Verilog code with [`nvboard`](https://github.com/NJU-ProjectN/nvboard), then I moved to an actual Xilinx [Zynq-7020]([ALINX AMD Xilinx Zynq 7000 SoC XC7Z020 zynq7020 FPGA Development Board / Evaluation Kit - AX7020](https://www.en.alinx.com/Product/SoC-development-Boards/Zynq-7000-SoC/AX7020.html)) board.
+In early development, I implemented the Verilog code with [`nvboard`](https://github.com/NJU-ProjectN/nvboard), then I moved to an actual Xilinx [Zynq-7020](https://www.en.alinx.com/Product/SoC-development-Boards/Zynq-7000-SoC/AX7020.html) board.
 
 
 
@@ -55,7 +55,7 @@ The current hardware entry point is `vsrc/cpu.v`. The current software entry poi
 
 ### Python Environment
 
-The software side uses PyTorch, TorchVision, NumPy, and Pillow. A typical local setup is:
+The software side uses `PyTorch`, `TorchVision`, `NumPy`, and `Pillow`. A typical local setup is:
 
 ```bash
 pip install torch torchvision numpy pillow
