@@ -46,7 +46,6 @@ module cpu (
     wire [31:0] Store_Data;
     wire [31:0] Mem_Read_Data;
     wire [31:0] Reg_Write_Data;
-    wire [31:0] Mem_LED_out;
 
     // Stage Register wires
     // IF_ID Stage
@@ -376,8 +375,7 @@ module cpu (
         .cnn_mem_addr(cnn_mem_addr),
         .cnn_mem_write_data(cnn_mem_write_data),
         .cnn_mem_read_data(cnn_mem_read_data),
-        .Mem_Read_Data(Mem_Read_Data),
-        .Mem_LED_out(Mem_LED_out)
+        .Mem_Read_Data(Mem_Read_Data)
     );
 
     MEM_WB_Reg m11 (
@@ -1369,8 +1367,7 @@ module Data_Memory #(
     input wire [11:0] cnn_mem_addr,
     input wire [7:0] cnn_mem_write_data,
     output wire [7:0] cnn_mem_read_data,
-    output wire [31:0] Mem_Read_Data,
-    output wire [31:0] Mem_LED_out
+    output wire [31:0] Mem_Read_Data
 );
     wire [9:0] cpu_word_addr;
     wire [9:0] cnn_word_addr;
@@ -1407,7 +1404,6 @@ module Data_Memory #(
     assign cnn_mem_read_data = (cnn_byte_sel == 2'd0) ? cnn_dout0 :
                                (cnn_byte_sel == 2'd1) ? cnn_dout1 :
                                (cnn_byte_sel == 2'd2) ? cnn_dout2 : cnn_dout3;
-    assign Mem_LED_out = 32'd0;
 
     always @(*) begin
         cpu_byte_we = 4'b0000;
