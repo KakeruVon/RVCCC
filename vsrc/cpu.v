@@ -45,6 +45,8 @@ module cpu (
     wire [31:0] ALU_Result;
     wire [31:0] Store_Data;
     wire [31:0] Mem_Read_Data;
+    wire [31:0] Data_Mem_Read_Data;
+    wire [31:0] MMIO_Read_Data;
     wire [31:0] Reg_Write_Data;
 
     // Stage Register wires
@@ -138,9 +140,16 @@ module cpu (
     wire [1:0] Forward_A;
     wire [1:0] Forward_B;
 
-    // CNN
-    wire cnn_en;
-    wire [3:0] predicted_class_LED;
+    // CNN and memory-mapped I/O
+    wire mmio_hit;
+    wire cnn_start;
+    wire cnn_soft_reset;
+    wire [11:0] cnn_base_addr;
+    wire cnn_busy;
+    wire cnn_done;
+    wire cnn_error;
+    wire [3:0] cnn_result;
+    wire [3:0] led_value;
     wire cnn_mem_read_en;
     wire cnn_mem_write_en;
     wire [11:0] cnn_mem_addr;
@@ -164,6 +173,7 @@ module cpu (
     assign Signal_Flush_Pipeline = Signal_Flush | Signal_Jalr_ID_EX;
     assign Forward_Data_EX_MEM = (Signal_Jal_EX_MEM || Signal_Jalr_EX_MEM) ?
                                  Return_Addr_EX_MEM : ALU_Result_EX_MEM;
+    assign Mem_Read_Data = mmio_hit ? MMIO_Read_Data : Data_Mem_Read_Data;
     
     //-------------------------------------------------------------
     // Module Instantiation
@@ -264,8 +274,7 @@ module cpu (
         .ALU_Op(ALU_Op),
         .ALU_In1_PC(ALU_In1_PC),
         .Funct3(Funct3),
-        .Imm_Value(Imm_Value),
-        .cnn_en(cnn_en)
+        .Imm_Value(Imm_Value)
     );
 
     ID_EX_reg m7 (
@@ -365,8 +374,8 @@ module cpu (
 
     Data_Memory m10 (
         .clk_50MHZ(clk_50MHZ),
-        .Mem_Write_EX_MEM(Mem_Write_EX_MEM),
-        .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
+        .Mem_Write_EX_MEM(Mem_Write_EX_MEM && !mmio_hit),
+        .Mem_Read_EX_MEM(Mem_Read_EX_MEM && !mmio_hit),
         .Mem_Write_Data(RF_Out2_EX_MEM),
         .Mem_Address(ALU_Result_EX_MEM),
         .Mem_Funct3_EX_MEM(Funct3_EX_MEM),
@@ -375,7 +384,27 @@ module cpu (
         .cnn_mem_addr(cnn_mem_addr),
         .cnn_mem_write_data(cnn_mem_write_data),
         .cnn_mem_read_data(cnn_mem_read_data),
-        .Mem_Read_Data(Mem_Read_Data)
+        .Mem_Read_Data(Data_Mem_Read_Data)
+    );
+
+    Mapped_IO m19 (
+        .clk_50MHZ(clk_50MHZ),
+        .rst(rst),
+        .Mem_Write_EX_MEM(Mem_Write_EX_MEM),
+        .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
+        .Mem_Write_Data(RF_Out2_EX_MEM),
+        .Mem_Address(ALU_Result_EX_MEM),
+        .Mem_Funct3_EX_MEM(Funct3_EX_MEM),
+        .cnn_busy(cnn_busy),
+        .cnn_done(cnn_done),
+        .cnn_result(cnn_result),
+        .mmio_hit(mmio_hit),
+        .MMIO_Read_Data(MMIO_Read_Data),
+        .cnn_start(cnn_start),
+        .cnn_soft_reset(cnn_soft_reset),
+        .cnn_base_addr(cnn_base_addr),
+        .cnn_error(cnn_error),
+        .led_value(led_value)
     );
 
     MEM_WB_Reg m11 (
@@ -480,23 +509,27 @@ module cpu (
     */
 
     // ---- New 4-LED binary display module ----
-    // Shows predicted_class_LED[3:0] in binary. LEDs are active-low:
+    // Shows the LED MMIO register in binary. LEDs are active-low:
     // output 0 lights the LED, output 1 turns it off.
     Four_LED_Binary_Display m17 (
-        .predicted_class_LED(predicted_class_LED),
+        .predicted_class_LED(led_value),
         .ledr(ledr)
     );
     
     cnn_core m18 (
         .clk_20MHZ(clk_20MHZ),
         .rst(rst),
-        .cnn_en(cnn_en),
+        .cnn_start(cnn_start),
+        .cnn_soft_reset(cnn_soft_reset),
+        .cnn_base_addr(cnn_base_addr),
         .cnn_mem_read_en(cnn_mem_read_en),
         .cnn_mem_write_en(cnn_mem_write_en),
         .cnn_mem_addr(cnn_mem_addr),
         .cnn_mem_write_data(cnn_mem_write_data),
         .cnn_mem_read_data(cnn_mem_read_data),
-        .predicted_class_LED(predicted_class_LED)
+        .cnn_busy(cnn_busy),
+        .cnn_done(cnn_done),
+        .cnn_result(cnn_result)
     );
 
 endmodule
@@ -836,7 +869,7 @@ module Control_Unit (
     input wire [31:0] Instruction_IF_ID,
 
     // Outputs
-    output reg Reg_Write, ALU_Src, Mem_Read, Mem_Write, Mem_to_Reg, cnn_en,
+    output reg Reg_Write, ALU_Src, Mem_Read, Mem_Write, Mem_to_Reg,
     output reg [3:0] ALU_Op,
     output reg ALU_In1_PC,
     output reg [2:0] Funct3,
@@ -875,7 +908,6 @@ module Control_Unit (
         Mem_Read   = 0;
         Mem_Write  = 0;
         Mem_to_Reg = 0;
-        cnn_en     = 1'b0;
         ALU_Op     = ALU_ADD;
         ALU_In1_PC = 1'b0;
         Funct3     = Instr_Funct3;
@@ -992,17 +1024,12 @@ module Control_Unit (
                     Mem_Write  = 0;
                 end
 
-                7'b1111111: begin         // Custom CNN trigger, unchanged
-                    cnn_en = 1'b1;
-                end
-
                 default: begin
                     Reg_Write  = 0;
                     ALU_Src    = 0;
                     Mem_Read   = 0;
                     Mem_Write  = 0;
                     Mem_to_Reg = 0;
-                    cnn_en     = 1'b0;
                     ALU_Op     = ALU_ADD;
                     ALU_In1_PC = 1'b0;
                     Imm_Value  = 32'h00000000;
@@ -1337,6 +1364,131 @@ module EX_MEM_Reg (
         end
     end
 
+endmodule
+
+// ================================================================
+// Mapped_IO - simple word-only memory-mapped peripheral block
+//
+// CNN registers:
+//   0x80001000 CONTROL: bit0=start, bit1=clear error, bit2=soft reset
+//   0x80001004 STATUS : bit0=busy, bit1=done, bit2=error
+//   0x80001008 BASE   : input image byte base in the 4KB data RAM
+//   0x8000100C RESULT : predicted class in bits [3:0]
+// LED register:
+//   0x80002000 LED    : bits [3:0] drive the board LEDs
+//
+// Only naturally aligned lw/sw accesses are supported. The CNN image is
+// 1024 bytes, so a valid base is aligned and no greater than 0xC00.
+// ================================================================
+module Mapped_IO (
+    input wire clk_50MHZ,
+    input wire rst,
+    input wire Mem_Write_EX_MEM,
+    input wire Mem_Read_EX_MEM,
+    input wire [31:0] Mem_Write_Data,
+    input wire [31:0] Mem_Address,
+    input wire [2:0] Mem_Funct3_EX_MEM,
+    input wire cnn_busy,
+    input wire cnn_done,
+    input wire [3:0] cnn_result,
+    output wire mmio_hit,
+    output reg [31:0] MMIO_Read_Data,
+    output reg cnn_start,
+    output reg cnn_soft_reset,
+    output reg [11:0] cnn_base_addr,
+    output wire cnn_error,
+    output reg [3:0] led_value
+);
+    localparam [31:0] CNN_MMIO_BASE = 32'h8000_1000;
+    localparam [31:0] LED_MMIO_ADDR = 32'h8000_2000;
+    localparam [31:0] CNN_MMIO_LAST = 32'h8000_1FFF;
+    localparam [11:0] DEFAULT_CNN_BASE = 12'hC00;
+    localparam [11:0] MAX_CNN_BASE = 12'hC00;
+
+    wire cnn_window_hit;
+    wire led_window_hit;
+    wire word_read;
+    wire word_write;
+    wire base_value_valid;
+    reg error_reg;
+
+    assign cnn_window_hit = (Mem_Address >= CNN_MMIO_BASE) &&
+                            (Mem_Address <= CNN_MMIO_LAST);
+    assign led_window_hit = (Mem_Address == LED_MMIO_ADDR);
+    assign mmio_hit = (Mem_Read_EX_MEM || Mem_Write_EX_MEM) &&
+                      (cnn_window_hit || led_window_hit);
+    assign word_read = Mem_Read_EX_MEM && mmio_hit &&
+                       (Mem_Funct3_EX_MEM == 3'b010) &&
+                       (Mem_Address[1:0] == 2'b00);
+    assign word_write = Mem_Write_EX_MEM && mmio_hit &&
+                        (Mem_Funct3_EX_MEM == 3'b010) &&
+                        (Mem_Address[1:0] == 2'b00);
+    assign base_value_valid = (Mem_Write_Data[31:12] == 20'd0) &&
+                              (Mem_Write_Data[1:0] == 2'b00) &&
+                              (Mem_Write_Data[11:0] <= MAX_CNN_BASE);
+    assign cnn_error = error_reg;
+
+    always @(*) begin
+        MMIO_Read_Data = 32'd0;
+        if (word_read) begin
+            case (Mem_Address)
+                CNN_MMIO_BASE + 32'h0004:
+                    MMIO_Read_Data = {29'd0, error_reg, cnn_done, cnn_busy};
+                CNN_MMIO_BASE + 32'h0008:
+                    MMIO_Read_Data = {20'd0, cnn_base_addr};
+                CNN_MMIO_BASE + 32'h000C:
+                    MMIO_Read_Data = {28'd0, cnn_result};
+                LED_MMIO_ADDR:
+                    MMIO_Read_Data = {28'd0, led_value};
+                default:
+                    MMIO_Read_Data = 32'd0;
+            endcase
+        end
+    end
+
+    always @(posedge clk_50MHZ or posedge rst) begin
+        if (rst) begin
+            cnn_start <= 1'b0;
+            cnn_soft_reset <= 1'b0;
+            cnn_base_addr <= DEFAULT_CNN_BASE;
+            led_value <= 4'd0;
+            error_reg <= 1'b0;
+        end else begin
+            cnn_start <= 1'b0;
+            cnn_soft_reset <= 1'b0;
+
+            if (word_write) begin
+                case (Mem_Address)
+                    CNN_MMIO_BASE: begin
+                        if (Mem_Write_Data[1])
+                            error_reg <= 1'b0;
+                        if (Mem_Write_Data[2]) begin
+                            cnn_soft_reset <= 1'b1;
+                            error_reg <= 1'b0;
+                        end
+                        if (Mem_Write_Data[0]) begin
+                            if (!cnn_busy)
+                                cnn_start <= 1'b1;
+                            else
+                                error_reg <= 1'b1;
+                        end
+                    end
+                    CNN_MMIO_BASE + 32'h0008: begin
+                        if (base_value_valid)
+                            cnn_base_addr <= Mem_Write_Data[11:0];
+                        else
+                            error_reg <= 1'b1;
+                    end
+                    LED_MMIO_ADDR: begin
+                        led_value <= Mem_Write_Data[3:0];
+                    end
+                    default: begin
+                        // Unsupported offsets are harmless no-ops.
+                    end
+                endcase
+            end
+        end
+    end
 endmodule
 
 // ================================================================
@@ -1927,22 +2079,21 @@ endmodule
 module cnn_core (
     input clk_20MHZ,
     input rst,
-    input cnn_en,
+    input cnn_start,
+    input cnn_soft_reset,
+    input [11:0] cnn_base_addr,
     output wire cnn_mem_read_en,
     output wire cnn_mem_write_en,
     output wire [11:0] cnn_mem_addr,
     output wire [7:0] cnn_mem_write_data,
     input wire [7:0] cnn_mem_read_data,
-    output reg [3:0] predicted_class_LED
+    output wire cnn_busy,
+    output wire cnn_done,
+    output reg [3:0] cnn_result
 );
 
-    wire cnn_en_int;
-
-    clock_cycle_counter t1(
-        .clk_20MHZ(clk_20MHZ),
-        .cnn_en(cnn_en),
-        .cnn_en_int(cnn_en_int)
-    );
+    assign cnn_busy = (state != S_IDLE) && (state != S_DONE);
+    assign cnn_done = (state == S_DONE);
 
     parameter SHIFT1 = 14;
     parameter SHIFT2 = 14;
@@ -2001,12 +2152,10 @@ module cnn_core (
     reg signed [15:0] fc_weight_dout;
     reg signed [31:0] fc_bias_dout;
 
-    localparam [11:0] CNN_IMAGE_BASE = 12'd3072;
-
-    assign cnn_mem_read_en = 1'b1;
+    assign cnn_mem_read_en = (state == S_C1_WAIT);
     assign cnn_mem_write_en = 1'b0;
     assign cnn_mem_write_data = 8'd0;
-    assign cnn_mem_addr = CNN_IMAGE_BASE + image_addr;
+    assign cnn_mem_addr = cnn_base_addr + image_addr;
     assign kernel1_bias_addr = 1'b0;
     assign kernel2_bias_addr = 1'b0;
 
@@ -2157,21 +2306,21 @@ module cnn_core (
     // ================================================================
     // FSM for sequential CNN inference with one shared MAC.
     // Flow:
-    //   IDLE waits for cnn_en_int.
+    //   IDLE waits for cnn_start.
     //   C1_SETUP/WAIT/ACCUM/STORE scans the 30x30 conv1 outputs;
     //   every 2x2 group is max-pooled and written to pool1_mem.
     //   C2_SETUP/WAIT/ACCUM/STORE scans the 13x13 conv2 outputs;
     //   valid 2x2 groups are max-pooled and written to pool2_mem.
     //   FC_SETUP/WAIT/ACCUM reuses the MAC for each class score row.
     //   ARGMAX_INIT/SCAN selects the largest class_score value.
-    //   DONE holds predicted_class_LED until reset or the next run.
+    //   DONE holds cnn_result until reset or the next run.
     // Each WAIT state gives the synchronous ROM/RAM read one clock cycle
     // before the ACCUM state consumes the registered data.
     // ================================================================
     always @(posedge clk_20MHZ or posedge rst) begin
-        if (rst) begin
+        if (rst || cnn_soft_reset) begin
             state <= S_IDLE;
-            predicted_class_LED <= 0;
+            cnn_result <= 0;
             image_addr <= 0;
             kernel1_addr <= 0;
             kernel2_addr <= 0;
@@ -2203,8 +2352,8 @@ module cnn_core (
         end else begin
             case (state)
                 S_IDLE: begin
-                    if (cnn_en_int) begin
-                        predicted_class_LED <= 0;
+                    if (cnn_start) begin
+                        cnn_result <= 0;
                         c1_row <= 0;
                         c1_col <= 0;
                         c1_mac_idx <= 0;
@@ -2349,9 +2498,9 @@ module cnn_core (
                         best_score <= class_score[arg_idx];
                         best_idx <= arg_idx;
                         if (arg_idx == 9)
-                            predicted_class_LED <= arg_idx;
+                            cnn_result <= arg_idx;
                     end else if (arg_idx == 9) begin
-                        predicted_class_LED <= best_idx;
+                        cnn_result <= best_idx;
                     end
 
                     if (arg_idx == 9) begin
@@ -2362,7 +2511,13 @@ module cnn_core (
                 end
 
                 S_DONE: begin
-                    predicted_class_LED <= predicted_class_LED;
+                    if (cnn_start) begin
+                        cnn_result <= 0;
+                        c1_row <= 0;
+                        c1_col <= 0;
+                        c1_mac_idx <= 0;
+                        state <= S_C1_SETUP;
+                    end
                 end
 
                 default: begin
@@ -2371,31 +2526,4 @@ module cnn_core (
             endcase
         end
     end
-endmodule
-
-module clock_cycle_counter(
-    input clk_20MHZ,
-    input cnn_en,
-    output reg cnn_en_int
-);
-
-    parameter TARGET_CYCLES = 30000; // Shared-MAC CNN latency guard at 20 MHz
-
-    reg [15:0] counter; // 4-bit counter to count clock cycles
-
-    always @(posedge clk_20MHZ or posedge cnn_en) begin
-        if (cnn_en) begin
-            counter <= 0;
-            cnn_en_int <= 1;
-        end else begin
-            if (counter == TARGET_CYCLES - 1) begin
-                counter <= 0;
-                cnn_en_int <= 0;
-            end else begin
-                counter <= counter + 1;
-                cnn_en_int <= cnn_en_int;
-            end
-        end
-    end
-
 endmodule

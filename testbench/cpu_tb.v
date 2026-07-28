@@ -87,14 +87,14 @@ module cpu_tb;
         #10;
         sysrst = 1'b1;
         $display("[%0t ns] Reset de-asserted -CPU starts running", $time);
-        $display("[%0t ns] Program: GCD(15,6) -CNN inference -ecall stall", $time);
+        $display("[%0t ns] Program: CNN MMIO base write -start -poll done -LED write", $time);
 
         // ---- Wait for program to complete ----
         // The CPU pipeline runs at 50 MHz (derived internally from 100 MHz clk).
         // The shared-MAC CNN accelerator runs at 20 MHz and needs about 20k cycles (~1 ms).
         // We wait 2 ms total to guarantee all outputs have stabilized.
-        // After the ecall instruction, the PC stalls permanently and the
-        // CNN runs to completion independently.
+        // After the ecall instruction, the PC stalls permanently; the program
+        // reaches it only after polling STATUS.done and writing the LED register.
 
         #1000000;  // 1 ms
         $display("[%0t ns]  1 ms elapsed -CNN should be finishing...", $time);

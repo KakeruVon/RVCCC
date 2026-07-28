@@ -17,6 +17,8 @@ The project files include the infrastructure, the hardware logic, and the softwa
 RVCCC/
 |-- vsrc/
 |   `-- cpu.v                  # Top-level Verilog source: RISC-V CPU, CNN core, LED output logic
+|-- programs/
+|   `-- cnn_mmio_poll.S     # Hand-written MMIO polling program
 |-- testbench/
 |   |-- cpu_tb.v               # Simulation testbench for the integrated CPU + CNN design
 |   `-- cpu_rv32i_tb.v         # Simulation testbench for rv32i instruction test
@@ -200,6 +202,50 @@ output_int = relu((sum(image_int * weight_int) + bias_int) >>> SHIFT)
 ```
 
 This keeps activations approximately at image scale after each layer while allowing the Verilog implementation to use shift-based requantization instead of division.
+
+### v2
+
+This version changes the CPU-CNN control path from a custom instruction to a simple memory-mapped I/O interface. The CPU controls the CNN through ordinary `lw` and `sw` instructions, and the design has been verified on the FPGA board. Now under develepment.
+
+#### Workflow
+
+The v2 workflow is controlled by a hand-written RISC-V polling program:
+
+1. Train the PyTorch CNN on MNIST resized to `32x32`.
+2. Quantize the trained weights and biases into integer `.mem` files.
+3. Generate `cnn.mem` from a selected MNIST test image.
+4. Load the hand-written program from `programs/cnn_mmio_poll.S` and `mem_files/instruction.mem`.
+5. Write the CNN input base address `0xC00` to the CNN base register.
+6. Write the start bit in the CNN control register.
+7. Poll the CNN status register until the `done` bit is set.
+8. Read the prediction result and write it to the LED memory-mapped register.
+
+#### Hardware Design
+
+The v2 design keeps the five-stage RISC-V CPU and sequential CNN accelerator from v1, while adding an independent `Mapped_IO` module for peripheral decoding.
+
+The current memory map is:
+
+```text
+0x80001000  CNN CONTROL: bit0=start, bit1=clear error, bit2=soft reset
+0x80001004  CNN STATUS : bit0=busy, bit1=done, bit2=error
+0x80001008  CNN BASE   : input image byte base address
+0x8000100C  CNN RESULT : predicted class in bits [3:0]
+0x80002000  LED        : four-bit LED output value
+```
+
+Only naturally aligned word accesses are supported for the mapped peripherals. The CNN base address must be four-byte aligned and must leave the complete 1KB input image inside the current 4KB data memory; therefore the highest valid base address is `0xC00`. The base register resets to `0xC00`, but the CPU writes it explicitly before starting inference.
+
+The CNN accelerator now receives a one-cycle start pulse and reports completion directly from its FSM through `busy` and `done` signals. The fixed-duration `clock_cycle_counter` and custom CNN trigger instruction were removed. CPU and CNN still use the unified clock in this version; clock-domain crossing support is reserved for a later version.
+
+#### Software Infrastructure and Verification
+
+- `programs/cnn_mmio_poll.S` contains the hand-written polling program.
+- `mem_files/instruction.mem` contains the corresponding manually generated machine-code image.
+- The program uses `lw` and `sw` for all CNN and LED accesses.
+- `testbench/cpu_tb.v` verifies the complete MMIO flow and reports the final LED prediction.
+- `testbench/cpu_rv32i_tb.v` continues to verify the base RV32I datapath.
+- An assembler and a more complete software toolchain are intentionally deferred to a later version.
 
 ## Current Limitations and Future Work
 
