@@ -44,12 +44,11 @@ $(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE)
 
 all: default
 
-instruction-mem:
+program:
 	python3 scripts/asm_to_mem.py $(ASM) -o $(INSTR_MEM)
 
 sim:
 	$(VERILATOR) --trace -cc --exe --build -j ./vsrc/top.v ./csrc/sim.cpp
-	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
 
 run: $(BIN)
 	@$^
@@ -57,5 +56,5 @@ run: $(BIN)
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: default all instruction-mem sim clean run
+.PHONY: default all program sim clean run
 include /home/steve-von/ysyx-workbench/Makefile

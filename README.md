@@ -109,7 +109,7 @@ python scripts/asm_to_mem.py programs/cnn_mmio_poll.S -o mem_files/instruction.m
 Or through Make:
 
 ```bash
-make instruction-mem ASM=programs/cnn_mmio_poll.S
+make program ASM=programs/cnn_mmio_poll.S
 ```
 
 The converter expects a RISC-V GNU bare-metal toolchain in `PATH`, such as `riscv64-unknown-elf-gcc` plus `riscv64-unknown-elf-objcopy`. If the tools use custom names or paths, pass them explicitly:
@@ -144,7 +144,7 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
 
-For v1 implementation, a high frequency clock is available, even **100MHz** clock won't cause any timing problem. At present, I'm using a **25MHz** global clock in v2 development. In future development, I will import different clocks for CPU and accelerator module, for the complex system to work faster.
+For **v1** implementation, a high frequency clock is available, even **100MHz** clock won't cause any timing problem. At present, I'm using a **25MHz** global clock in **v2**. In future development, I will import different clocks for CPU and accelerator module, for the complex system to work faster.
 
 
 

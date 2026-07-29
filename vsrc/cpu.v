@@ -2092,9 +2092,6 @@ module cnn_core (
     output reg [3:0] cnn_result
 );
 
-    assign cnn_busy = (state != S_IDLE) && (state != S_DONE);
-    assign cnn_done = (state == S_DONE);
-
     parameter SHIFT1 = 14;
     parameter SHIFT2 = 14;
     parameter SHIFT_FC = 14;
@@ -2116,6 +2113,9 @@ module cnn_core (
     localparam S_DONE        = 5'd14;
 
     reg [4:0] state;
+    
+    assign cnn_busy = (state != S_IDLE) && (state != S_DONE);
+    assign cnn_done = (state == S_DONE);
 
     // ================================================================
     // CNN weights, biases, and intermediate results.
