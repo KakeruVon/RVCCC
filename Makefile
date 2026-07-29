@@ -6,6 +6,8 @@ INC_PATH ?=
 BUILD_DIR = ./build
 OBJ_DIR = $(BUILD_DIR)/obj_dir
 BIN = $(BUILD_DIR)/$(TOPNAME)
+ASM ?= programs/cnn_mmio_poll.S
+INSTR_MEM ?= mem_files/instruction.mem
 
 VERILATOR = verilator
 VERILATOR_CFLAGS += -MMD --build -cc  \
@@ -42,6 +44,9 @@ $(BIN): $(VSRCS) $(CSRCS) $(NVBOARD_ARCHIVE)
 
 all: default
 
+instruction-mem:
+	python3 scripts/asm_to_mem.py $(ASM) -o $(INSTR_MEM)
+
 sim:
 	$(VERILATOR) --trace -cc --exe --build -j ./vsrc/top.v ./csrc/sim.cpp
 	$(call git_commit, "sim RTL") # DO NOT REMOVE THIS LINE!!!
@@ -52,5 +57,5 @@ run: $(BIN)
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: default all sim clean run
+.PHONY: default all instruction-mem sim clean run
 include /home/steve-von/ysyx-workbench/Makefile

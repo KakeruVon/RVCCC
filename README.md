@@ -98,6 +98,30 @@ Run a batch accuracy check:
 python scripts/batch_accuracy.py --count 1000
 ```
 
+### Assembly to Instruction Memory
+
+Write the CPU program as RV32I assembly under `programs/`, then assemble it into the 1KB instruction-memory image used by Verilog:
+
+```bash
+python scripts/asm_to_mem.py programs/cnn_mmio_poll.S -o mem_files/instruction.mem
+```
+
+Or through Make:
+
+```bash
+make instruction-mem ASM=programs/cnn_mmio_poll.S
+```
+
+The converter expects a RISC-V GNU bare-metal toolchain in `PATH`, such as `riscv64-unknown-elf-gcc` plus `riscv64-unknown-elf-objcopy`. If the tools use custom names or paths, pass them explicitly:
+
+```bash
+python scripts/asm_to_mem.py programs/cnn_mmio_poll.S \
+  --cc /path/to/riscv64-unknown-elf-gcc \
+  --objcopy /path/to/riscv64-unknown-elf-objcopy
+```
+
+The generated `.mem` file contains one 32-bit instruction word per line in hex, padded to 256 words with `00000000`, matching the current `Instruction_Memory` depth.
+
 ### RTL Simulation
 
 For ModelSim-style simulation, compile `vsrc/cpu.v` and `testbench/cpu_tb.v`, start `cpu_tb`, add the desired waveforms, and run until completion. The testbench generates a 100 MHz input clock, releases reset, waits for the CPU program and CNN inference to settle, and prints the decoded prediction from the active-low LED output.
@@ -253,4 +277,3 @@ The CNN accelerator now receives a one-cycle start pulse and reports completion 
 - Instruction RAM loads from `.mem`; data RAM uses four byte-lane `.mem` file pairs so Vivado can infer true dual-port block RAM while preserving a CPU data region at the front and the CNN image in the final 1KB.
 - The CNN accelerator is sequential and resource-conscious; later versions can explore more parallelism, DMA-style data movement, and a cleaner memory-mapped accelerator interface.
 - The current visible output is a 4-bit LED prediction. Earlier seven-segment display logic is kept in comments, and future versions may restore a richer board-level display or host-side reporting path.
-
