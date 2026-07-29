@@ -144,7 +144,7 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
 
-Instruction memory is initialized from `instruction.mem`. Data memory is implemented as four 8-bit true dual-port byte-lane RAMs. `data_b0.mem` through `data_b3.mem` initialize the first 3KB, and `cnn_b0.mem` through `cnn_b3.mem` initialize the final 1KB at byte addresses `0xC00..0xFFF`. The byte-oriented `data.mem` and `cnn.mem` remain the source format for generating those lane files.
+For v1 implementation, a high frequency clock is available, even **100MHz** clock won't cause any timing problem. At present, I'm using a **25MHz** global clock in v2 development. In future development, I will import different clocks for CPU and accelerator module, for the complex system to work faster.
 
 
 
