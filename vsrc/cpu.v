@@ -93,7 +93,7 @@ module cpu (
     wire Signal_Flush;              // Pipeline flush
     wire Signal_Flush_Pipeline;     // Pipeline flush including EX-stage jumps
     wire Signal_Branch;             // Branch
-    wire Signal_Jal;               // JAL
+    wire Signal_Jal;                // JAL
     wire Signal_Jalr;               // Register-indirect jump
     wire Signal_Stall;              // Stall
     wire Signal_Ecall;              // Ecall
@@ -881,7 +881,7 @@ module Control_Unit (
     //-------------------------------------------------------------
     wire [6:0] Opcode;
     wire [2:0] Instr_Funct3;
-    wire [6:0] Funct7;
+    wire [6:0] Instr_Funct7;
 
     localparam [3:0] ALU_ADD  = 4'h0;
     localparam [3:0] ALU_SUB  = 4'h1;
@@ -900,7 +900,7 @@ module Control_Unit (
     //-------------------------------------------------------------
     assign Opcode = Instruction_IF_ID[6:0];
     assign Instr_Funct3 = Instruction_IF_ID[14:12];
-    assign Funct7 = Instruction_IF_ID[31:25];
+    assign Instr_Funct7 = Instruction_IF_ID[31:25];
 
     always @(*) begin
         Reg_Write  = 0;
@@ -917,7 +917,7 @@ module Control_Unit (
             case (Opcode)
                 7'b0110011: begin         // R-type
                     Reg_Write = 1;
-                    case ({Funct7[5], Instr_Funct3})
+                    case ({Instr_Funct7[5], Instr_Funct3})
                         4'b0_000: ALU_Op = ALU_ADD;
                         4'b1_000: ALU_Op = ALU_SUB;
                         4'b0_001: ALU_Op = ALU_SLL;
@@ -947,12 +947,12 @@ module Control_Unit (
                         3'b110: ALU_Op = ALU_OR;   // ori
                         3'b111: ALU_Op = ALU_AND;  // andi
                         3'b001: begin              // slli
-                            ALU_Op = (Funct7 == 7'b0000000) ? ALU_SLL : ALU_ADD;
-                            Reg_Write = (Funct7 == 7'b0000000);
+                            ALU_Op = (Instr_Funct7 == 7'b0000000) ? ALU_SLL : ALU_ADD;
+                            Reg_Write = (Instr_Funct7 == 7'b0000000);
                         end
                         3'b101: begin              // srli/srai
                             ALU_Op = Instruction_IF_ID[30] ? ALU_SRA : ALU_SRL;
-                            Reg_Write = (Funct7 == 7'b0000000) || (Funct7 == 7'b0100000);
+                            Reg_Write = (Instr_Funct7 == 7'b0000000) || (Instr_Funct7 == 7'b0100000);
                         end
                         default: begin
                             Reg_Write = 0;
@@ -1047,7 +1047,7 @@ module ID_EX_reg (
     input wire rst,
     input wire Signal_Flush,            // Pipeline flush
     input wire Signal_Branch_IF_ID,     // Branch
-    input wire Signal_Jal_IF_ID,       // JAL
+    input wire Signal_Jal_IF_ID,        // JAL
     input wire Signal_Jalr_IF_ID,       // Register-indirect jump
     input wire Signal_Stall,            // Stall
     input wire [1:0] Addr_IF_ID,
@@ -1107,7 +1107,7 @@ module ID_EX_reg (
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst == 1) begin
             Signal_Branch_ID_EX <= 0;
-            Signal_Jal_ID_EX   <= 0;
+            Signal_Jal_ID_EX    <= 0;
             Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
@@ -1132,7 +1132,7 @@ module ID_EX_reg (
         end
         else if (Signal_Flush==1) begin
             Signal_Branch_ID_EX <= 0;
-            Signal_Jal_ID_EX   <= 0;
+            Signal_Jal_ID_EX    <= 0;
             Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
@@ -1157,7 +1157,7 @@ module ID_EX_reg (
         end
         else if (Signal_Stall==1) begin
             Signal_Branch_ID_EX <= 0;
-            Signal_Jal_ID_EX   <= 0;
+            Signal_Jal_ID_EX    <= 0;
             Signal_Jalr_ID_EX   <= 0;
             Addr_ID_EX          <= 0;
             State_ID_EX         <= 0;
@@ -1182,7 +1182,7 @@ module ID_EX_reg (
         end
         else begin
             Signal_Branch_ID_EX <= Signal_Branch_IF_ID;
-            Signal_Jal_ID_EX   <= Signal_Jal_IF_ID;
+            Signal_Jal_ID_EX    <= Signal_Jal_IF_ID;
             Signal_Jalr_ID_EX   <= Signal_Jalr_IF_ID;
             Addr_ID_EX          <= Addr_IF_ID;
             State_ID_EX         <= State_IF_ID;
@@ -1335,7 +1335,7 @@ module EX_MEM_Reg (
     //-------------------------------------------------------------
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst==1) begin
-            Signal_Jal_EX_MEM  <= 0;
+            Signal_Jal_EX_MEM   <= 0;
             Signal_Jalr_EX_MEM  <= 0;
             Reg_Write_EX_MEM    <= 0;
             Mem_Read_EX_MEM     <= 0;
@@ -1349,7 +1349,7 @@ module EX_MEM_Reg (
             Funct3_EX_MEM       <= 0;
         end
         else begin
-            Signal_Jal_EX_MEM  <= Signal_Jal_ID_EX;
+            Signal_Jal_EX_MEM   <= Signal_Jal_ID_EX;
             Signal_Jalr_EX_MEM  <= Signal_Jalr_ID_EX;
             Reg_Write_EX_MEM    <= Reg_Write_ID_EX;
             Mem_Read_EX_MEM     <= Mem_Read_ID_EX;
@@ -1709,7 +1709,7 @@ module MEM_WB_Reg (
     //-------------------------------------------------------------
     always @(posedge clk_50MHZ, posedge rst) begin
         if (rst==1) begin
-            Signal_Jal_MEM_WB  <= 0;
+            Signal_Jal_MEM_WB   <= 0;
             Signal_Jalr_MEM_WB  <= 0;
             Reg_Write_MEM_WB    <= 0;
             Mem_to_Reg_MEM_WB   <= 0;
@@ -1720,7 +1720,7 @@ module MEM_WB_Reg (
             Return_Addr_MEM_WB  <= 0;
         end
         else begin
-            Signal_Jal_MEM_WB  <= Signal_Jal_EX_MEM;
+            Signal_Jal_MEM_WB   <= Signal_Jal_EX_MEM;
             Signal_Jalr_MEM_WB  <= Signal_Jalr_EX_MEM;
             Reg_Write_MEM_WB    <= Reg_Write_EX_MEM;
             Mem_to_Reg_MEM_WB   <= Mem_to_Reg_EX_MEM;
