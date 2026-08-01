@@ -666,7 +666,7 @@ module Instruction_Memory (
     initial begin
         for (i = 0; i < INSTR_MEM_WORDS; i = i + 1)
             mem[i] = 32'h00000000;
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/instruction.mem", mem);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/instruction.mem", mem);
     end
 
     always @(negedge clk_50MHZ) begin
@@ -1499,14 +1499,14 @@ endmodule
 // loads and per-lane stores; the CNN port retains byte addressing.
 // ================================================================
 module Data_Memory #(
-    parameter DATA_B0_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b0.mem",
-    parameter DATA_B1_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b1.mem",
-    parameter DATA_B2_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b2.mem",
-    parameter DATA_B3_FILE = "D:/_ProjectFile/Clone/RVCCC/mem_files/data_b3.mem",
-    parameter CNN_B0_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b0.mem",
-    parameter CNN_B1_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b1.mem",
-    parameter CNN_B2_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b2.mem",
-    parameter CNN_B3_FILE  = "D:/_ProjectFile/Clone/RVCCC/mem_files/cnn_b3.mem"
+    parameter DATA_B0_FILE = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/data_b0.mem",
+    parameter DATA_B1_FILE = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/data_b1.mem",
+    parameter DATA_B2_FILE = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/data_b2.mem",
+    parameter DATA_B3_FILE = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/data_b3.mem",
+    parameter CNN_B0_FILE  = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/cnn_b0.mem",
+    parameter CNN_B1_FILE  = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/cnn_b1.mem",
+    parameter CNN_B2_FILE  = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/cnn_b2.mem",
+    parameter CNN_B3_FILE  = "D:/_ProjectFile/_MyProj/RVCCC/mem_files/cnn_b3.mem"
 ) (
     input wire clk_50MHZ,
     input wire Mem_Write_EX_MEM,
@@ -2260,12 +2260,12 @@ module cnn_core (
     endfunction
 
     initial begin
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel1.mem", kernel1_rom);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel1_bias.mem", kernel1_bias_rom);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel2.mem", kernel2_rom);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/kernel2_bias.mem", kernel2_bias_rom);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/weights.mem", fc_weights_rom);
-        $readmemh("D:/_ProjectFile/Clone/RVCCC/mem_files/biases.mem", fc_biases_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/kernel1.mem", kernel1_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/kernel1_bias.mem", kernel1_bias_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/kernel2.mem", kernel2_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/kernel2_bias.mem", kernel2_bias_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/weights.mem", fc_weights_rom);
+        $readmemh("D:/_ProjectFile/_MyProj/RVCCC/mem_files/biases.mem", fc_biases_rom);
     end
 
     // ================================================================
