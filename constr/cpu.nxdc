@@ -26,5 +26,5 @@ ledr (LD3, LD2, LD1, LD0)
 # ps2_clk PS2_CLK
 # ps2_data PS2_DAT
 
-# uart_tx UART_TX
-# uart_rx UART_RX
+uart_tx UART_TX
+uart_rx UART_RX

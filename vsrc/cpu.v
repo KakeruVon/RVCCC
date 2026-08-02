@@ -8,7 +8,9 @@ module cpu (
     // ---- Second direct-drive display outputs (commented out) ----
     // output [7:0] seg0, seg1, seg2, seg3, seg4, seg5, seg6, seg7
     // ---- New 4-LED binary output (active-low) ----
-    output [3:0] ledr
+    output [3:0] ledr,
+    output uart_tx,
+    input uart_rx
 );
     //-------------------------------------------------------------
     // Registers / Wires
@@ -20,7 +22,8 @@ module cpu (
     
     // ================================================================
     // Temporarily unify the system clock to avoid clock domain crossing (CDC) issues.
-    // Now in practice, these 2 clocks are both connected to a 50MHz external clock.
+    // During current validation, both paths use the 25MHz external clock; the
+    // legacy signal names are kept for compatibility with the existing modules.
     // ================================================================
     wire clk_50MHZ;
     wire clk_20MHZ;
@@ -155,6 +158,11 @@ module cpu (
     wire [11:0] cnn_mem_addr;
     wire [7:0] cnn_mem_write_data;
     wire [7:0] cnn_mem_read_data;
+    wire uart_tx_valid;
+    wire [7:0] uart_tx_data;
+    wire uart_tx_busy;
+    wire uart_rx_valid;
+    wire [7:0] uart_rx_data;
     
 
     //------------------------Parameters---------------------------
@@ -194,7 +202,7 @@ module cpu (
     */
 
     // Mux takes in PC+4, Exception Cycle intialization address or Branch Address
-    PC_Module m1 (
+    PC_Module pc_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Branch(Signal_Branch),
@@ -213,13 +221,13 @@ module cpu (
         .PC(PC)
     );
 
-    Instruction_Memory m2 (
+    Instruction_Memory instruction_memory_inst (
         .clk_50MHZ(clk_50MHZ),
         .Mem_Address(PC),
         .Instruction(Instruction)
     );
 
-    Branch_Jump m3 (
+    Branch_Jump branch_jump_inst (
         .Instruction(Instruction),
         .Signal_Branch(Signal_Branch),
         .Signal_Jal(Signal_Jal),
@@ -228,7 +236,7 @@ module cpu (
         .Jump_Addr(Jump_Addr)
     );
 
-    IF_ID_reg m4 (
+    IF_ID_reg if_id_reg_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Flush(Signal_Flush_Pipeline),
@@ -251,7 +259,7 @@ module cpu (
         .Return_Addr_IF_ID(Return_Addr_IF_ID)
     );
 
-    Register_File m5 (
+    Register_File register_file_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Reg_Write(Reg_Write_MEM_WB),
@@ -263,7 +271,7 @@ module cpu (
         .RD_Data2_ID_EX(RF_Out2)
     );
 
-    Control_Unit m6 (
+    Control_Unit control_unit_inst (
         .Signal_Stall(Signal_Stall),
         .Instruction_IF_ID(Instruction_IF_ID),
         .Reg_Write(Reg_Write),
@@ -277,7 +285,7 @@ module cpu (
         .Imm_Value(Imm_Value)
     );
 
-    ID_EX_reg m7 (
+    ID_EX_reg id_ex_reg_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Flush(Signal_Flush_Pipeline),
@@ -327,7 +335,7 @@ module cpu (
         .Imm_Value_ID_EX(Imm_Value_ID_EX)
     );
 
-    ALU m8 (
+    ALU alu_inst (
         .ALU_Op_ID_EX(ALU_Op_ID_EX),
         .ALU_In1_ID_EX(RF_Out1_ID_EX),     
         .ALU_In2_ID_EX(RF_Out2_ID_EX),
@@ -345,7 +353,7 @@ module cpu (
         .ALU_Result(ALU_Result)
     );
 
-    EX_MEM_Reg m9 (
+    EX_MEM_Reg ex_mem_reg_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Jal_ID_EX(Signal_Jal_ID_EX),
@@ -372,7 +380,7 @@ module cpu (
         .Funct3_EX_MEM(Funct3_EX_MEM)
     );
 
-    Data_Memory m10 (
+    Data_Memory data_memory_inst (
         .clk_50MHZ(clk_50MHZ),
         .Mem_Write_EX_MEM(Mem_Write_EX_MEM && !mmio_hit),
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM && !mmio_hit),
@@ -387,7 +395,7 @@ module cpu (
         .Mem_Read_Data(Data_Mem_Read_Data)
     );
 
-    Mapped_IO m19 (
+    Mapped_IO mapped_io_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Mem_Write_EX_MEM(Mem_Write_EX_MEM),
@@ -404,10 +412,15 @@ module cpu (
         .cnn_soft_reset(cnn_soft_reset),
         .cnn_base_addr(cnn_base_addr),
         .cnn_error(cnn_error),
-        .led_value(led_value)
+        .led_value(led_value),
+        .uart_tx_busy(uart_tx_busy),
+        .uart_rx_valid(uart_rx_valid),
+        .uart_rx_data(uart_rx_data),
+        .uart_tx_valid(uart_tx_valid),
+        .uart_tx_data(uart_tx_data)
     );
 
-    MEM_WB_Reg m11 (
+    MEM_WB_Reg mem_wb_reg_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Jal_EX_MEM(Signal_Jal_EX_MEM),
@@ -428,7 +441,7 @@ module cpu (
         .Return_Addr_MEM_WB(Return_Addr_MEM_WB)
     );
 
-    Forwarding_Unit m12 (
+    Forwarding_Unit forwarding_unit_inst (
         .Reg_Write_EX_MEM(Reg_Write_EX_MEM),
         .Reg_Write_MEM_WB(Reg_Write_MEM_WB),
         .rd_EX_MEM(rd_EX_MEM),
@@ -439,7 +452,7 @@ module cpu (
         .Forward_B(Forward_B)
     );
 
-    Hazard_Detection_Unit m13 (
+    Hazard_Detection_Unit hazard_detection_unit_inst (
         .rst(rst),
         .Mem_Read_ID_EX(Mem_Read_ID_EX),
         .rd_ID_EX(rd_ID_EX),
@@ -448,7 +461,7 @@ module cpu (
         .Signal_Stall(Signal_Stall)
     );
 
-    Branch_Table m14 (
+    Branch_Table branch_table_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
@@ -458,7 +471,7 @@ module cpu (
         .State(State)
     );
 
-    Branch_Predictor m15(
+    Branch_Predictor branch_predictor_inst(
         .Outcome(Outcome),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
         .State_ID_EX(State_ID_EX),
@@ -466,7 +479,7 @@ module cpu (
         .Signal_Flush(Signal_Flush)
     );
 
-    Writeback_Unit m16 (
+    Writeback_Unit writeback_unit_inst (
         .Mem_to_Reg_MEM_WB(Mem_to_Reg_MEM_WB),
         .Signal_Jal_MEM_WB(Signal_Jal_MEM_WB),
         .Signal_Jalr_MEM_WB(Signal_Jalr_MEM_WB),
@@ -478,7 +491,7 @@ module cpu (
 
     // ---- Old scanning display module (commented out) ----
     /*
-    Eight_Digit_Hex_Display m17 (
+    Eight_Digit_Hex_Display eight_digit_hex_display_inst (
         .clk_50MHZ(clk_50MHZ),
         .rst(rst),
         .Mem_LED_in(Mem_LED_out[27:0]),
@@ -494,7 +507,7 @@ module cpu (
     //                      bit[3]=E, bit[2]=F, bit[1]=G, bit[0]=P)
     // Active-low: 0 = segment ON, 1 = segment OFF
     /*
-    Eight_Digit_Hex_Display m17 (
+    Eight_Digit_Hex_Display eight_digit_hex_display_inst (
         .predicted_class_LED(predicted_class_LED),
         .Mem_LED_in(Mem_LED_out[27:0]),
         .seg0(seg0),
@@ -511,12 +524,24 @@ module cpu (
     // ---- New 4-LED binary display module ----
     // Shows the LED MMIO register in binary. LEDs are active-low:
     // output 0 lights the LED, output 1 turns it off.
-    Four_LED_Binary_Display m17 (
+    Four_LED_Binary_Display four_led_binary_display_inst (
         .predicted_class_LED(led_value),
         .ledr(ledr)
     );
+
+    uart_top uart_inst (
+        .clk(clk_50MHZ),
+        .rst(rst),
+        .tx_valid(uart_tx_valid),
+        .tx_data(uart_tx_data),
+        .tx_busy(uart_tx_busy),
+        .tx(uart_tx),
+        .rx(uart_rx),
+        .rx_valid(uart_rx_valid),
+        .rx_data(uart_rx_data)
+    );
     
-    cnn_core m18 (
+    cnn_core cnn_core_inst (
         .clk_20MHZ(clk_20MHZ),
         .rst(rst),
         .cnn_start(cnn_start),
@@ -1376,9 +1401,15 @@ endmodule
 //   0x8000100C RESULT : predicted class in bits [3:0]
 // LED register:
 //   0x80002000 LED    : bits [3:0] drive the board LEDs
+// UART registers:
+//   0x80003000 TXDATA : write bits [7:0] to start one transmission
+//   0x80003004 STATUS : bit0=tx_busy_or_pending, bit1=rx_valid
+//   0x80003008 RXDATA : most recently received byte in bits [7:0]
 //
 // Only naturally aligned lw/sw accesses are supported. The CNN image is
 // 1024 bytes, so a valid base is aligned and no greater than 0xC00.
+// A UART TX write while tx_busy or tx_valid is asserted is ignored; software
+// should poll STATUS before writing the next byte.
 // ================================================================
 module Mapped_IO (
     input wire clk_50MHZ,
@@ -1391,32 +1422,44 @@ module Mapped_IO (
     input wire cnn_busy,
     input wire cnn_done,
     input wire [3:0] cnn_result,
+    input wire uart_tx_busy,
+    input wire uart_rx_valid,
+    input wire [7:0] uart_rx_data,
     output wire mmio_hit,
     output reg [31:0] MMIO_Read_Data,
     output reg cnn_start,
     output reg cnn_soft_reset,
     output reg [11:0] cnn_base_addr,
     output wire cnn_error,
-    output reg [3:0] led_value
+    output reg [3:0] led_value,
+    output reg uart_tx_valid,
+    output reg [7:0] uart_tx_data
 );
     localparam [31:0] CNN_MMIO_BASE = 32'h8000_1000;
     localparam [31:0] LED_MMIO_ADDR = 32'h8000_2000;
+    localparam [31:0] UART_MMIO_BASE = 32'h8000_3000;
     localparam [31:0] CNN_MMIO_LAST = 32'h8000_1FFF;
+    localparam [31:0] UART_MMIO_LAST = 32'h8000_300B;
     localparam [11:0] DEFAULT_CNN_BASE = 12'hC00;
     localparam [11:0] MAX_CNN_BASE = 12'hC00;
 
     wire cnn_window_hit;
     wire led_window_hit;
+    wire uart_window_hit;
     wire word_read;
     wire word_write;
     wire base_value_valid;
     reg error_reg;
+    reg uart_rx_valid_reg;
+    reg [7:0] uart_rx_data_reg;
 
     assign cnn_window_hit = (Mem_Address >= CNN_MMIO_BASE) &&
                             (Mem_Address <= CNN_MMIO_LAST);
     assign led_window_hit = (Mem_Address == LED_MMIO_ADDR);
+    assign uart_window_hit = (Mem_Address >= UART_MMIO_BASE) &&
+                             (Mem_Address <= UART_MMIO_LAST);
     assign mmio_hit = (Mem_Read_EX_MEM || Mem_Write_EX_MEM) &&
-                      (cnn_window_hit || led_window_hit);
+                      (cnn_window_hit || led_window_hit || uart_window_hit);
     assign word_read = Mem_Read_EX_MEM && mmio_hit &&
                        (Mem_Funct3_EX_MEM == 3'b010) &&
                        (Mem_Address[1:0] == 2'b00);
@@ -1440,6 +1483,10 @@ module Mapped_IO (
                     MMIO_Read_Data = {28'd0, cnn_result};
                 LED_MMIO_ADDR:
                     MMIO_Read_Data = {28'd0, led_value};
+                UART_MMIO_BASE + 32'h0004:
+                    MMIO_Read_Data = {30'd0, uart_rx_valid_reg, (uart_tx_busy | uart_tx_valid)};
+                UART_MMIO_BASE + 32'h0008:
+                    MMIO_Read_Data = {24'd0, uart_rx_data_reg};
                 default:
                     MMIO_Read_Data = 32'd0;
             endcase
@@ -1453,9 +1500,14 @@ module Mapped_IO (
             cnn_base_addr <= DEFAULT_CNN_BASE;
             led_value <= 4'd0;
             error_reg <= 1'b0;
+            uart_tx_valid <= 1'b0;
+            uart_tx_data <= 8'd0;
+            uart_rx_valid_reg <= 1'b0;
+            uart_rx_data_reg <= 8'd0;
         end else begin
             cnn_start <= 1'b0;
             cnn_soft_reset <= 1'b0;
+            uart_tx_valid <= 1'b0;
 
             if (word_write) begin
                 case (Mem_Address)
@@ -1482,16 +1534,29 @@ module Mapped_IO (
                     LED_MMIO_ADDR: begin
                         led_value <= Mem_Write_Data[3:0];
                     end
+                    UART_MMIO_BASE: begin
+                        if (!uart_tx_busy && !uart_tx_valid) begin
+                            uart_tx_data <= Mem_Write_Data[7:0];
+                            uart_tx_valid <= 1'b1;
+                        end
+                    end
                     default: begin
                         // Unsupported offsets are harmless no-ops.
                     end
                 endcase
             end
+
+            if (word_read && (Mem_Address == UART_MMIO_BASE + 32'h0008))
+                uart_rx_valid_reg <= 1'b0;
+
+            if (uart_rx_valid) begin
+                uart_rx_data_reg <= uart_rx_data;
+                uart_rx_valid_reg <= 1'b1;
+            end
         end
     end
 endmodule
 
-// ================================================================
 // Data_Memory - 4KB shared CPU/CNN data RAM
 //
 // The CPU port remains split into four 8-bit true dual-port RAMs so

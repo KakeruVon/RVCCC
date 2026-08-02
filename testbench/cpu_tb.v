@@ -2,8 +2,8 @@
 // ================================================================
 // cpu_tb.v -Testbench for the RISC-V CPU with Integrated CNN Accelerator
 //
-// Clock:    clk toggles every 5 ns (100 MHz input)
-// Reset:    sysrst = 1 for first 10 ns, then sysrst = 0
+// Clock:    clk toggles every 20 ns (25 MHz input)
+// Reset:    sysrst = 0 for the first 100 ns, then sysrst = 1
 // Behavior: Clock runs until all outputs stabilize, then stops toggling.
 //           Simulation finishes shortly after.
 //
@@ -26,6 +26,8 @@ module cpu_tb;
     // Outputs
     //-------------------------------------------------------------
     wire [3:0] ledr;
+    wire uart_tx;
+    reg uart_rx = 1'b1;
     wire [3:0] predicted_class_bits;
 
     //-------------------------------------------------------------
@@ -47,17 +49,27 @@ module cpu_tb;
                  $time, predicted_class_bits, ledr);
     end
 
+    always @(posedge clk) begin
+        #1;
+        if (uut.mapped_io_inst.uart_tx_valid) begin
+            $display("[%0t ns] UART TX byte: 0x%02h (%c)",
+                     $time, uut.mapped_io_inst.uart_tx_data, uut.mapped_io_inst.uart_tx_data);
+        end
+    end
+
     //-------------------------------------------------------------
     // Device Under Test
     //-------------------------------------------------------------
     cpu uut (
         .clk (clk),
         .sysrst (sysrst),
-        .ledr(ledr)
+        .ledr(ledr),
+        .uart_tx(uart_tx),
+        .uart_rx(uart_rx)
     );
 
     //-------------------------------------------------------------
-    // Clock generation: toggle every 5 ns -> 100 MHz
+    // Clock generation: toggle every 20 ns -> 25 MHz
     //-------------------------------------------------------------
     initial begin
         clk    = 1'b0;
@@ -65,7 +77,7 @@ module cpu_tb;
     end
 
     always begin
-        #5;
+        #20;
         if (clk_en) begin
             clk = ~clk;
         end
@@ -83,15 +95,14 @@ module cpu_tb;
         $display("========================================");
         $display("[%0t ns] Reset asserted", $time);
 
-        // ---- Hold reset for 10 ns ----
-        #10;
+        // ---- Hold reset through multiple 25 MHz clock edges ----
+        #100;
         sysrst = 1'b1;
         $display("[%0t ns] Reset de-asserted -CPU starts running", $time);
-        $display("[%0t ns] Program: CNN MMIO base write -start -poll done -LED write", $time);
+        $display("[%0t ns] Program: CNN MMIO base write -start -poll done -LED write -UART send", $time);
 
         // ---- Wait for program to complete ----
-        // The CPU pipeline runs at 50 MHz (derived internally from 100 MHz clk).
-        // The shared-MAC CNN accelerator runs at 20 MHz and needs about 20k cycles (~1 ms).
+        // The CPU pipeline and shared-MAC CNN accelerator both run on the 25 MHz input clock.
         // We wait 2 ms total to guarantee all outputs have stabilized.
         // After the ecall instruction, the PC stalls permanently; the program
         // reaches it only after polling STATUS.done and writing the LED register.

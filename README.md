@@ -143,6 +143,7 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 | `clk` | External input clock | `U18` |
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
+| `uart_tx` / `uart_rx` | UART output/input | NVBoard aliases `UART_TX` / `UART_RX`; assign board pins in XDC |
 
 For **v1** implementation, a high frequency clock is available, even **100MHz** clock won't cause any timing problem. At present, I'm using a **25MHz** global clock in **v2**. In future development, I will import different clocks for CPU and accelerator module, for the complex system to work faster.
 
@@ -242,7 +243,7 @@ The v2 workflow is controlled by a hand-written RISC-V polling program:
 5. Write the CNN input base address `0xC00` to the CNN base register.
 6. Write the start bit in the CNN control register.
 7. Poll the CNN status register until the `done` bit is set.
-8. Read the prediction result and write it to the LED memory-mapped register.
+8. Read the prediction result, write it to the LED register, and send its ASCII digit over UART.
 
 #### Hardware Design
 
@@ -256,6 +257,9 @@ The current memory map is:
 0x80001008  CNN BASE   : input image byte base address
 0x8000100C  CNN RESULT : predicted class in bits [3:0]
 0x80002000  LED        : four-bit LED output value
+0x80003000  UART TXDATA : write one byte to transmit
+0x80003004  UART STATUS : bit0=tx_busy_or_pending, bit1=rx_valid
+0x80003008  UART RXDATA : most recently received byte
 ```
 
 Only naturally aligned word accesses are supported for the mapped peripherals. The CNN base address must be four-byte aligned and must leave the complete 1KB input image inside the current 4KB data memory; therefore the highest valid base address is `0xC00`. The base register resets to `0xC00`, but the CPU writes it explicitly before starting inference.
@@ -266,7 +270,7 @@ The CNN accelerator now receives a one-cycle start pulse and reports completion 
 
 - `programs/cnn_mmio_poll.S` contains the hand-written polling program.
 - `mem_files/instruction.mem` contains the corresponding manually generated machine-code image.
-- The program uses `lw` and `sw` for all CNN and LED accesses.
+- The program uses `lw` and `sw` for all CNN, LED, and UART accesses. It polls UART `tx_busy_or_pending` before each byte.
 - `testbench/cpu_tb.v` verifies the complete MMIO flow and reports the final LED prediction.
 - `testbench/cpu_rv32i_tb.v` continues to verify the base RV32I datapath.
 - An assembler and a more complete software toolchain are intentionally deferred to a later version.
