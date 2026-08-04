@@ -1,4 +1,7 @@
-# Makefile for implementing the project with Verilator and NVboard.
+# Makefile for implementing the project with Verilator and NVboard, and for building the software program with RISC-V GCC toolchain.
+#  - Run the simulation with verilator: make sim
+#  - Run the simulation on NVBoard: make run
+#  - Build the software program: make program
 
 TOPNAME = RVCCC
 NXDC_FILES = constr/RVCCC.nxdc

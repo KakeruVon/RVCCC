@@ -1,7 +1,7 @@
 # RVCCC - RISC-V Core Controlled CNN accelerator
 An **SoC** Project on FPGA featuring a **RISC-V CPU** core with a **CNN accelerating module**. Successfully implemented on **Zynq-7020**. Got the original project structure from [`RISC-V-Core-with-Integrated-CNN-Accelerator`](https://github.com/dev-the-desai/RISC-V-Core-with-Integrated-CNN-Accelerator) by `dev-the-desai`, and it has been enriched in multiple ways.
 
-This project is now developing under a progressive pattern. Currently, I finished the first version `v1`, which is barely a CPU and an accelerating module put together. In further development, the CPU will be a control center of the whole process, arranging CNN module, bus, as well as communication with the host computer.
+This project is developing under a progressive pattern. The first version `v1` connected the CPU and accelerator through a custom CNN trigger instruction. The current default implementation is `v2`, which replaces that custom control path with memory-mapped I/O, adds an LED register and a UART peripheral, and lets the CPU run a normal RV32I polling program to control CNN inference. In further development, the CPU will become the control center for a fuller SoC dataflow, including bus organization, accelerator scheduling, and host-computer communication.
 
 The purpose of this project is to accelerate neural network inference with hardware logic. I built a CNN model with 2 convolution+pooling+ReLU layers and 1 fully connected layer, trained with MNIST dataset, and implemented the model on FPGA to recognize the numbers in MNIST test images.
 
@@ -11,22 +11,32 @@ In early development, I implemented the Verilog code with [`nvboard`](https://gi
 
 ## File Structure
 
-The project files include the infrastructure, the hardware logic, and the software stack. 
+The project files include the infrastructure, the hardware logic, and the software stack.
 
 ```text
 RVCCC/
-|-- vsrc/
-|   `-- cpu.v                  # Top-level Verilog source: RISC-V CPU, CNN core, LED output logic
+|-- vsrc/                      # Synthesizable Verilog sources
+|   |-- RVCCC.v                # Current top level: CPU, CNN, MMIO, LED, and UART integration
+|   |-- riscv_core.v           # Five-stage RV32I CPU modules
+|   |-- Instruction_Memory.v   # 1KB instruction RAM loaded from instruction.mem
+|   |-- Data_Memory.v          # 4KB byte-lane true dual-port RAM shared by CPU and CNN
+|   |-- cnn_core.v             # Sequential fixed-point CNN accelerator
+|   |-- Mapped_IO.v            # CNN, LED, and UART memory-mapped register block
+|   |-- CLK_Gen.v              # Clock divider for current CPU/CNN clocks
+|   |-- uart_top.v             # UART wrapper, 8N1, default 115200 baud
+|   |-- uart_tx.v              # UART transmitter
+|   |-- uart_rx.v              # UART receiver
+|   `-- output.v               # LED and legacy seven-segment display helpers
 |-- programs/
-|   `-- cnn_mmio_poll.S     # Hand-written MMIO polling program
+|   `-- cnn_mmio_poll.S        # Hand-written MMIO polling program
 |-- testbench/
-|   |-- cpu_tb.v               # Simulation testbench for the integrated CPU + CNN design
-|   `-- cpu_rv32i_tb.v         # Simulation testbench for rv32i instruction test
+|   |-- RVCCC_tb.v             # Integrated CPU + CNN + MMIO + UART testbench
+|   `-- RVCCC_rv32i_tb.v       # RV32I datapath self-test testbench
 |-- csrc/
 |   `-- run.cpp                # Verilator + NVBoard simulation entry
 |-- constr/
-|   |-- cpu.xdc                # Vivado FPGA pin and clock constraints
-|   `-- cpu.nxdc               # NVBoard pin mapping
+|   |-- RVCCC.xdc              # Vivado FPGA pin and clock constraints for AX7020/Zynq-7020
+|   `-- RVCCC.nxdc             # NVBoard pin mapping
 |-- models/
 |   `-- cnn_model.py           # PyTorch CNN definition used for MNIST training
 |-- scripts/
@@ -36,7 +46,9 @@ RVCCC/
 |   |-- testmem.py             # Select one MNIST test image and generate cnn.mem
 |   |-- sim.py                 # Integer CNN simulator matching the Verilog datapath
 |   |-- batch_accuracy.py      # Batch accuracy test for floating-point and quantized inference
-|   `-- debug_verify.py        # Detailed software/hardware consistency checks
+|   |-- debug_verify.py        # Detailed software/hardware consistency checks
+|   |-- asm_to_mem.py          # Build RV32I assembly into instruction.mem
+|   `-- uart_test.py           # Host-side UART helper for board testing
 |-- mem_files/
 |   |-- instruction.mem        # 1KB instruction memory image, one 32-bit word per line in hex
 |   |-- data.mem               # First 3KB data-memory byte source
@@ -50,22 +62,23 @@ RVCCC/
 |   `-- adapt/                 # Per-layer adaptive-shift quantization output
 |-- weights/
 |   `-- mnist_cnn.pth          # Trained PyTorch model checkpoint
+|-- doc/
+|   `-- AX7020_User_Manual.pdf # Board reference manual
 |-- Makefile                   # Verilator/NVBoard build flow
 `-- test programs.txt          # Small RISC-V assembly programs used during CPU bring-up
 ```
 
-The current hardware entry point is `vsrc/cpu.v`. The current software entry points are the Python scripts under `scripts/`, which train the reference model, quantize it, prepare MNIST images, and check the fixed-point inference behavior before the generated memory files are used by Verilog.
-
+The current hardware entry point is `vsrc/RVCCC.v`. The current software entry points are the Python scripts under `scripts/`, which train the reference model, quantize it, prepare MNIST images, assemble the RV32I control program, and check the fixed-point inference behavior before the generated memory files are used by Verilog.
 
 
 ## Quick Start
 
 ### Python Environment
 
-The software side uses `PyTorch`, `TorchVision`, `NumPy`, and `Pillow`. A typical local setup is:
+The software side uses `PyTorch`, `TorchVision`, `NumPy`, `Pillow`, and `Peripheral`. A typical local setup is:
 
 ```bash
-pip install torch torchvision numpy pillow
+pip install torch torchvision numpy pillow peripheral
 ```
 
 Train the CNN model:
@@ -124,7 +137,7 @@ The generated `.mem` file contains one 32-bit instruction word per line in hex, 
 
 ### RTL Simulation
 
-For ModelSim-style simulation, compile `vsrc/cpu.v` and `testbench/cpu_tb.v`, start `cpu_tb`, add the desired waveforms, and run until completion. The testbench generates a 100 MHz input clock, releases reset, waits for the CPU program and CNN inference to settle, and prints the decoded prediction from the active-low LED output.
+For ModelSim-style simulation, compile the Verilog files under `vsrc/` and `testbench/RVCCC_tb.v`, start `RVCCC_tb`, add the desired waveforms, and run until completion. The integrated testbench releases reset, waits for the MMIO polling program and CNN inference to settle, prints the decoded active-low LED prediction, and reports the bytes written to UART.
 
 For the NVBoard/Verilator path, make sure `NVBOARD_HOME` points to a valid NVBoard installation, then run:
 
@@ -140,12 +153,12 @@ The Vivado constraint file maps the current top-level ports to the Zynq-7020 boa
 
 | Signal | Meaning | Constraint |
 | --- | --- | --- |
-| `clk` | External input clock | `U18` |
+| `clk` | External 50 MHz input clock | `U18` |
 | `sysrst` | Reset input | `N15` |
 | `ledr[3:0]` | Active-low binary prediction output | `M14`, `M15`, `K16`, `J16` |
-| `uart_tx` / `uart_rx` | UART output/input | NVBoard aliases `UART_TX` / `UART_RX`; assign board pins in XDC |
+| `uart_tx` / `uart_rx` | UART output/input | `H15` / `K14` |
 
-For **v1** implementation, a high frequency clock is available, even **100MHz** clock won't cause any timing problem. At present, I'm using a **25MHz** global clock in **v2**. In future development, I will import different clocks for CPU and accelerator module, for the complex system to work faster.
+The current `v2` connects to a 50 MHz crystal oscillator clock and divides it by two in `CLK_Gen`, so both `clk_cpu` and `clk_cnn` run at 25 MHz with the same phase. This intentionally avoids clock-domain crossing issues while the MMIO-based CPU/CNN control path is being validated. Later versions can reintroduce separate CPU and accelerator clocks once the bus and synchronization design are cleaner.
 
 
 
@@ -173,7 +186,7 @@ The v1 workflow is intentionally simple:
 6. Run the CNN core with fixed-point arithmetic and block-memory-backed parameters.
 7. Show the final predicted digit on four active-low LEDs.
 
-The instruction memory is loaded from `mem_files/instruction.mem`. The checked-in image contains the original small GCD program followed by a custom CNN trigger instruction (`FE00707F`) and then `ecall`.
+The instruction memory is loaded from `mem_files/instruction.mem`. In the original v1 snapshot, this image contained a small GCD program followed by a custom CNN trigger instruction (`FE00707F`) and then `ecall`; in the current tree, `instruction.mem` is rebuilt for the v2 MMIO polling program.
 
 
 #### Hardware Design
@@ -210,7 +223,7 @@ The software infrastructure is used to keep the hardware implementation tied to 
 
 - `models/cnn_model.py` defines the exact CNN architecture used by training and verification.
 - `scripts/train.py` trains the model for MNIST classification and stores the checkpoint in `weights/mnist_cnn.pth`.
-- `scripts/quantize.py` exports the current fixed-point format used by `cpu.v`: signed int16 weights, signed int32 biases, and `SHIFT1 = SHIFT2 = SHIFT_FC = 14`.
+- `scripts/quantize.py` exports the fixed-point format used by the Verilog CNN datapath: signed int16 weights, signed int32 biases, and `SHIFT1 = SHIFT2 = SHIFT_FC = 14`.
 - `scripts/quantize_adaptive.py` can also produce `mem_files/fixed/` and `mem_files/adapt/` variants for comparing fixed and per-layer shifts.
 - `scripts/testmem.py` converts one MNIST test image into `mem_files/cnn.mem` and saves `mem_files/test_image.png` for visual checking.
 - `scripts/sim.py` is a hardware-style integer CNN simulator. It reads the same `.mem` files as Verilog and mirrors the fixed-point datapath.
@@ -230,7 +243,7 @@ This keeps activations approximately at image scale after each layer while allow
 
 ### v2
 
-This version changes the CPU-CNN control path from a custom instruction to a simple memory-mapped I/O interface. The CPU controls the CNN through ordinary `lw` and `sw` instructions, and the design has been verified on the FPGA board. Now under develepment.
+This is the current implementation. It changes the CPU-CNN control path from a custom instruction to a simple memory-mapped I/O interface. The CPU controls the accelerator, LED output, and UART through ordinary `lw` and `sw` instructions, and the integrated design has been verified on the FPGA board. Finished in 2026-08-04.
 
 #### Workflow
 
@@ -238,16 +251,16 @@ The v2 workflow is controlled by a hand-written RISC-V polling program:
 
 1. Train the PyTorch CNN on MNIST resized to `32x32`.
 2. Quantize the trained weights and biases into integer `.mem` files.
-3. Generate `cnn.mem` from a selected MNIST test image.
-4. Load the hand-written program from `programs/cnn_mmio_poll.S` and `mem_files/instruction.mem`.
-5. Write the CNN input base address `0xC00` to the CNN base register.
-6. Write the start bit in the CNN control register.
-7. Poll the CNN status register until the `done` bit is set.
-8. Read the prediction result, write it to the LED register, and send its ASCII digit over UART.
+3. Generate `cnn.mem` and `cnn_b*.mem` from a selected MNIST test image.
+4. Build `programs/cnn_mmio_poll.S` into `mem_files/instruction.mem` with `scripts/asm_to_mem.py` or `make program`.
+5. After reset, the CPU writes the CNN input base address `0xC00` to the CNN base register.
+6. The CPU writes the start bit in the CNN control register.
+7. The CPU polls the CNN status register until the `done` bit is set.
+8. The CPU reads the prediction result, writes it to the LED register, and sends the ASCII digit plus CR/LF over UART.
 
 #### Hardware Design
 
-The v2 design keeps the five-stage RISC-V CPU and sequential CNN accelerator from v1, while adding an independent `Mapped_IO` module for peripheral decoding.
+The v2 top level is `RVCCC`. It keeps the five-stage RV32I CPU and sequential CNN accelerator from v1, while adding the `Mapped_IO` peripheral block, a board LED register, and an 8N1 UART running at 115200 baud by default.
 
 The current memory map is:
 
@@ -257,27 +270,31 @@ The current memory map is:
 0x80001008  CNN BASE   : input image byte base address
 0x8000100C  CNN RESULT : predicted class in bits [3:0]
 0x80002000  LED        : four-bit LED output value
-0x80003000  UART TXDATA : write one byte to transmit
-0x80003004  UART STATUS : bit0=tx_busy_or_pending, bit1=rx_valid
-0x80003008  UART RXDATA : most recently received byte
+0x80003000  UART TXDATA: write one byte to transmit
+0x80003004  UART STATUS: bit0=tx_busy_or_pending, bit1=rx_valid
+0x80003008  UART RXDATA: most recently received byte
 ```
 
-Only naturally aligned word accesses are supported for the mapped peripherals. The CNN base address must be four-byte aligned and must leave the complete 1KB input image inside the current 4KB data memory; therefore the highest valid base address is `0xC00`. The base register resets to `0xC00`, but the CPU writes it explicitly before starting inference.
+Only naturally aligned word accesses are supported for the mapped peripherals. Unsupported offsets read as zero or act as harmless no-ops. The CNN image is 1024 bytes inside the 4KB data memory, so the base address must be four-byte aligned and no greater than `0xC00`. The base register resets to `0xC00`, but the polling program writes it explicitly before starting inference.
 
-The CNN accelerator now receives a one-cycle start pulse and reports completion directly from its FSM through `busy` and `done` signals. The fixed-duration `clock_cycle_counter` and custom CNN trigger instruction were removed. CPU and CNN still use the unified clock in this version; clock-domain crossing support is reserved for a later version.
+The CNN start register generates a one-cycle start pulse when the accelerator is idle. A start request while the CNN is busy sets the error bit. Writing bit1 of `CNN CONTROL` clears the error bit, and writing bit2 asserts a CNN soft reset and clears the error bit. The CNN reports completion directly through its FSM-driven `busy` and `done` outputs.
+
+The data RAM is implemented as four byte-lane true dual-port memories. The CPU side supports RV32I byte, halfword, and word loads/stores through `funct3`; the CNN side uses byte addressing to read the input image from the selected base address. The checked-in lane files initialize the CPU data region in the first 3KB and the CNN image region in the final 1KB.
+
+`CLK_Gen` currently derives both `clk_cpu` and `clk_cnn` from the same divided 25 MHz clock. This keeps v2 free of clock-domain crossing issues while the MMIO control path is being validated. Separate CPU and accelerator clocks are reserved for a later version.
 
 #### Software Infrastructure and Verification
 
-- `programs/cnn_mmio_poll.S` contains the hand-written polling program.
-- `mem_files/instruction.mem` contains the corresponding manually generated machine-code image.
-- The program uses `lw` and `sw` for all CNN, LED, and UART accesses. It polls UART `tx_busy_or_pending` before each byte.
-- `testbench/cpu_tb.v` verifies the complete MMIO flow and reports the final LED prediction.
-- `testbench/cpu_rv32i_tb.v` continues to verify the base RV32I datapath.
-- An assembler and a more complete software toolchain are intentionally deferred to a later version.
+- `programs/cnn_mmio_poll.S` contains the hand-written polling program for CNN start/status/result, LED output, and UART transmission.
+- `scripts/asm_to_mem.py` assembles RV32I code into the 256-word `mem_files/instruction.mem` image used by `Instruction_Memory`.
+- `make program ASM=programs/cnn_mmio_poll.S` is the Makefile wrapper for rebuilding the instruction memory.
+- The program uses only ordinary `lw` and `sw` instructions for peripheral access and polls UART `tx_busy_or_pending` before each transmitted byte.
+- `testbench/RVCCC_tb.v` verifies the complete MMIO flow and prints both the final LED prediction and UART bytes.
+- `testbench/RVCCC_rv32i_tb.v` continues to verify the base RV32I datapath with an injected self-test program.
 
 ## Current Limitations and Future Work
 
 - The CPU and CNN are integrated, but the CPU does not yet manage a complete SoC-level dataflow with a bus, host communication, and dynamic program/image loading.
 - Instruction RAM loads from `.mem`; data RAM uses four byte-lane `.mem` file pairs so Vivado can infer true dual-port block RAM while preserving a CPU data region at the front and the CNN image in the final 1KB.
-- The CNN accelerator is sequential and resource-conscious; later versions can explore more parallelism, DMA-style data movement, and a cleaner memory-mapped accelerator interface.
+- The CNN accelerator is sequential and resource-conscious; later versions can explore more parallelism, DMA-style data movement, and a cleaner SoC bus interface.
 - The current visible output is a 4-bit LED prediction. Earlier seven-segment display logic is kept in comments, and future versions may restore a richer board-level display or host-side reporting path.
