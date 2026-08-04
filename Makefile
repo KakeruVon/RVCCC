@@ -1,7 +1,7 @@
 # Makefile for implementing the project with Verilator and NVboard.
 
-TOPNAME = cpu
-NXDC_FILES = constr/cpu.nxdc
+TOPNAME = RVCCC
+NXDC_FILES = constr/RVCCC.nxdc
 INC_PATH ?=
 BUILD_DIR = ./build
 OBJ_DIR = $(BUILD_DIR)/obj_dir

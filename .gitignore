@@ -2,6 +2,10 @@
 .venv/
 .linux_venv/
 
+# Python cache files
+scripts/__pycache__/
+models/__pycache__/
+
 # VS Code settings
 .vscode/
 vide.toml

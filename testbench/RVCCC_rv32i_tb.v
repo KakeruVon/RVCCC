@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 
-module cpu_rv32i_tb;
+module RVCCC_rv32i_tb;
     reg clk = 1'b0;
     reg sysrst = 1'b0;
     wire [3:0] ledr;
@@ -9,7 +9,7 @@ module cpu_rv32i_tb;
     integer i;
     integer failures = 0;
 
-    cpu uut (
+    RVCCC uut (
         .clk(clk),
         .sysrst(sysrst),
         .ledr(ledr),

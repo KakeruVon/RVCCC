@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 // ================================================================
-// cpu_tb.v -Testbench for the RISC-V CPU with Integrated CNN Accelerator
+// cpu_tb.v -Testbench for RVCCC
 //
 // Clock:    clk toggles every 20 ns (25 MHz input)
 // Reset:    sysrst = 0 for the first 100 ns, then sysrst = 1
@@ -8,13 +8,13 @@
 //           Simulation finishes shortly after.
 //
 // Usage in ModelSim:
-//   1. Compile cpu.v and cpu_tb.v
-//   2. Start simulation: vsim cpu_tb
+//   1. Compile RVCCC.v and RVCCC_tb.v
+//   2. Start simulation: vsim RVCCC_tb
 //   3. Add waves:   add wave -r /*
 //   4. Run:         run -all
 // ================================================================
 
-module cpu_tb;
+module RVCCC_tb;
 
     //-------------------------------------------------------------
     // Inputs
@@ -60,7 +60,7 @@ module cpu_tb;
     //-------------------------------------------------------------
     // Device Under Test
     //-------------------------------------------------------------
-    cpu uut (
+    RVCCC uut (
         .clk (clk),
         .sysrst (sysrst),
         .ledr(ledr),
