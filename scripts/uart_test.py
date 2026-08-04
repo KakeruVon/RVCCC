@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Automatically find a serial port and print received bytes as hex and ASCII.
+
+Install the only third-party dependency with:
+
+    python -m pip install pyserial
+
+Examples:
+
+    python scripts/uart_test.py
+    python scripts/uart_test.py --port COM7 --baud 115200
+    python scripts/uart_test.py --list
+"""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+import sys
+import time
+
+
+def load_pyserial():
+    try:
+        import serial
+        from serial.tools import list_ports
+    except ModuleNotFoundError as exc:
+        raise SystemExit(
+            "pyserial is not installed. Run: python -m pip install pyserial"
+        ) from exc
+    return serial, list_ports
+
+
+def port_label(info) -> str:
+    description = info.description or "Unknown device"
+    manufacturer = info.manufacturer or ""
+    parts = [description]
+    if manufacturer and manufacturer not in description:
+        parts.append(manufacturer)
+    return " - ".join(parts)
+
+
+def port_score(info) -> int:
+    text = " ".join(
+        value or ""
+        for value in (
+            info.device,
+            info.description,
+            info.manufacturer,
+            info.product,
+            info.interface,
+        )
+    ).lower()
+    keywords = (
+        "uart",
+        "usb",
+        "serial",
+        "ch340",
+        "ch341",
+        "cp210",
+        "ftdi",
+        "silicon labs",
+        "jtag",
+        "xilinx",
+    )
+    return sum(keyword in text for keyword in keywords)
+
+
+def find_ports(list_ports):
+    ports = list(list_ports.comports())
+    return sorted(ports, key=lambda info: (-port_score(info), info.device))
+
+
+def print_ports(ports) -> None:
+    if not ports:
+        print("No serial ports found.")
+        return
+
+    print("Available serial ports:")
+    for index, info in enumerate(ports, start=1):
+        print(f"  {index}. {info.device}: {port_label(info)}")
+
+
+def choose_port(ports, requested: str | None) -> str:
+    if requested:
+        return requested
+    if not ports:
+        raise SystemExit(
+            "No serial port found. Connect the board and run the script again."
+        )
+
+    selected = ports[0]
+    print(f"Automatically selected {selected.device}: {port_label(selected)}")
+    if len(ports) > 1:
+        print("Use --port to select a different port.")
+    return selected.device
+
+
+def format_ascii(data: bytes) -> str:
+    result = []
+    for value in data:
+        if 0x20 <= value <= 0x7E:
+            result.append(chr(value))
+        elif value == 0x09:
+            result.append(r"\t")
+        elif value == 0x0A:
+            result.append(r"\n")
+        elif value == 0x0D:
+            result.append(r"\r")
+        else:
+            result.append(f"\\x{value:02x}")
+    return "".join(result)
+
+
+def receive_loop(serial, port: str, baud: int, timeout: float) -> None:
+    try:
+        with serial.Serial(
+            port=port,
+            baudrate=baud,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=timeout,
+        ) as connection:
+            print(f"Connected to {port} at {baud} baud.")
+            print("Waiting for data. Press Ctrl+C to stop.")
+            while True:
+                data = connection.read(connection.in_waiting or 1)
+                if not data:
+                    continue
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                hex_text = " ".join(f"{value:02X}" for value in data)
+                print(
+                    f"[{timestamp}] "
+                    f"HEX: {hex_text:<47} "
+                    f"ASCII: {format_ascii(data)}",
+                    flush=True,
+                )
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    except serial.SerialException as exc:
+        raise SystemExit(f"Serial connection failed: {exc}") from exc
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Find a serial port and print received bytes as hex and ASCII."
+    )
+    parser.add_argument(
+        "--port",
+        help="serial port to use, for example COM7; auto-detected when omitted",
+    )
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=115200,
+        help="baud rate, default: 115200",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1.0,
+        help="serial read timeout in seconds, default: 1.0",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help="list serial ports and exit",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    if args.baud <= 0:
+        raise SystemExit("--baud must be positive")
+    if args.timeout < 0:
+        raise SystemExit("--timeout must be non-negative")
+
+    serial, list_ports = load_pyserial()
+    ports = find_ports(list_ports)
+
+    if args.list_only:
+        print_ports(ports)
+        return 0
+
+    port = choose_port(ports, args.port)
+    receive_loop(serial, port, args.baud, args.timeout)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
