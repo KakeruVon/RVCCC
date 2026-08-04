@@ -20,15 +20,9 @@ module cpu (
     wire rst;
     assign rst = ~sysrst;
     
-    // ================================================================
-    // Temporarily unify the system clock to avoid clock domain crossing (CDC) issues.
-    // During current validation, both paths use the 25MHz external clock; the
-    // legacy signal names are kept for compatibility with the existing modules.
-    // ================================================================
-    wire clk_50MHZ;
-    wire clk_20MHZ;
-    assign clk_50MHZ = clk;
-    assign clk_20MHZ = clk;
+    // Clock signals
+    wire clk_cpu;
+    wire clk_cnn;
     
     // Flags
     wire Branch_Taken;
@@ -187,23 +181,20 @@ module cpu (
     // Module Instantiation
     //-------------------------------------------------------------
 
-    
-    /*
-    CLK_Gen clk_generation (
+    CLK_Gen clk_generation_inst (
         // Clock out ports
-        .clk_50MHZ(clk_50MHZ),     // output clk_50MHZ
-        .clk_20MHZ(clk_20MHZ),     // output clk_20MHZ
+        .clk_cpu(clk_cpu),     // output clk_cpu
+        .clk_cnn(clk_cnn),     // output clk_cnn
         // Status and control signals
         .rst(rst), // input reset
         // .locked(locked),       // output locked
         // Clock in ports
         .clk_in(clk)      // input clk_in
     );
-    */
 
     // Mux takes in PC+4, Exception Cycle intialization address or Branch Address
     PC_Module pc_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Branch(Signal_Branch),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
@@ -222,7 +213,7 @@ module cpu (
     );
 
     Instruction_Memory instruction_memory_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .Mem_Address(PC),
         .Instruction(Instruction)
     );
@@ -237,7 +228,7 @@ module cpu (
     );
 
     IF_ID_reg if_id_reg_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Flush(Signal_Flush_Pipeline),
         .Signal_Branch(Signal_Branch),
@@ -260,7 +251,7 @@ module cpu (
     );
 
     Register_File register_file_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Reg_Write(Reg_Write_MEM_WB),
         .rs1(rs1),
@@ -286,7 +277,7 @@ module cpu (
     );
 
     ID_EX_reg id_ex_reg_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Flush(Signal_Flush_Pipeline),
         .Signal_Branch_IF_ID(Signal_Branch_IF_ID),
@@ -354,7 +345,7 @@ module cpu (
     );
 
     EX_MEM_Reg ex_mem_reg_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Jal_ID_EX(Signal_Jal_ID_EX),
         .Signal_Jalr_ID_EX(Signal_Jalr_ID_EX),
@@ -381,7 +372,7 @@ module cpu (
     );
 
     Data_Memory data_memory_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .Mem_Write_EX_MEM(Mem_Write_EX_MEM && !mmio_hit),
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM && !mmio_hit),
         .Mem_Write_Data(RF_Out2_EX_MEM),
@@ -396,7 +387,7 @@ module cpu (
     );
 
     Mapped_IO mapped_io_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Mem_Write_EX_MEM(Mem_Write_EX_MEM),
         .Mem_Read_EX_MEM(Mem_Read_EX_MEM),
@@ -421,7 +412,7 @@ module cpu (
     );
 
     MEM_WB_Reg mem_wb_reg_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Jal_EX_MEM(Signal_Jal_EX_MEM),
         .Signal_Jalr_EX_MEM(Signal_Jalr_EX_MEM),
@@ -462,7 +453,7 @@ module cpu (
     );
 
     Branch_Table branch_table_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Signal_Branch_ID_EX(Signal_Branch_ID_EX),
         .Addr(PC[4:3]),
@@ -492,7 +483,7 @@ module cpu (
     // ---- Old scanning display module (commented out) ----
     /*
     Eight_Digit_Hex_Display eight_digit_hex_display_inst (
-        .clk_50MHZ(clk_50MHZ),
+        .clk_cpu(clk_cpu),
         .rst(rst),
         .Mem_LED_in(Mem_LED_out[27:0]),
         .predicted_class_LED(predicted_class_LED),
@@ -530,7 +521,7 @@ module cpu (
     );
 
     uart_top uart_inst (
-        .clk(clk_50MHZ),
+        .clk(clk_cpu),
         .rst(rst),
         .tx_valid(uart_tx_valid),
         .tx_data(uart_tx_data),
@@ -542,7 +533,7 @@ module cpu (
     );
     
     cnn_core cnn_core_inst (
-        .clk_20MHZ(clk_20MHZ),
+        .clk_cnn(clk_cnn),
         .rst(rst),
         .cnn_start(cnn_start),
         .cnn_soft_reset(cnn_soft_reset),
@@ -562,52 +553,34 @@ endmodule
 
 // ================================================================
 // CLK_Gen - Clock generation module
-// Input:  clk_in = 100 MHz
-// Output: clk_50MHZ = 50 MHz (div-by-2)
-//         clk_20MHZ = 20 MHz (div-by-5)
+// Input:  clk_in = 50 MHz (cristal oscillator)
+// Output: clk_cpu = 25 MHz (divide-by-2)
+//         clk_cnn = 25 MHz (divide-by-2)
+// Temporarily unify the system clock to avoid clock domain crossing (CDC) issues.
+// During current validation, both paths use the 25MHz clock.
 // ================================================================
-/*
 module CLK_Gen (
     input clk_in,
     input rst,
-    output reg clk_50MHZ,
-    output reg clk_20MHZ
+    output reg clk_cpu,
+    output reg clk_cnn
 );
-    // ---- 50 MHz generation: simple toggle (divide-by-2) ----
-    always @(posedge clk_in or posedge rst) begin
-        if (rst)
-            clk_50MHZ <= 1'b0;
-        else
-            clk_50MHZ <= ~clk_50MHZ;
-    end
-
-    // ---- 20 MHz generation: divide-by-5 counter ----
-    // 100 MHz / 5 = 20 MHz, 40% duty cycle (2 high, 3 low)
-    reg [2:0] cnt_20m;
-
+    // ---- 25 MHz generation: simple toggle (divide-by-2) ----
     always @(posedge clk_in or posedge rst) begin
         if (rst) begin
-            cnt_20m   <= 3'd0;
-            clk_20MHZ <= 1'b0;
+            clk_cpu <= 1'b0;
+            clk_cnn <= 1'b0;
         end else begin
-            if (cnt_20m == 3'd4) begin
-                cnt_20m   <= 3'd0;
-                clk_20MHZ <= 1'b0;
-            end else begin
-                if (cnt_20m == 3'd2)
-                    clk_20MHZ <= 1'b1;
-                cnt_20m <= cnt_20m + 1'b1;
-            end
+            clk_cpu <= ~clk_cpu;
+            clk_cnn <= ~clk_cnn;
         end
     end
-
 endmodule
-*/
 
 
 module PC_Module (
     // Inputs
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Branch,
     input wire Signal_Branch_ID_EX,
@@ -642,7 +615,7 @@ module PC_Module (
     assign Branch_Mispredict = Signal_Branch_ID_EX && (Prediction_ID_EX ^ Outcome);
     assign Jalr_Target_Aligned = {Jalr_Target[31:1], 1'b0};
     
-    always @(posedge clk_50MHZ, posedge rst) begin
+    always @(posedge clk_cpu, posedge rst) begin
         if (rst==1) begin
             PC <= 32'h0; // rst
         end
@@ -667,7 +640,7 @@ endmodule
 
 module Instruction_Memory (
     // Inputs
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire [31:0] Mem_Address,
 
     // Outputs
@@ -694,7 +667,7 @@ module Instruction_Memory (
         $readmemh("instruction.mem", mem);
     end
 
-    always @(negedge clk_50MHZ) begin
+    always @(negedge clk_cpu) begin
         Instruction <= mem[word_addr];
     end
 
@@ -762,7 +735,7 @@ endmodule
 module IF_ID_reg (
     // Inputs
     // Control Signals
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Flush,            // Pipeline flush
     input wire Signal_Branch,           // Branch
@@ -794,7 +767,7 @@ module IF_ID_reg (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(posedge clk_50MHZ, posedge rst) begin
+    always @(posedge clk_cpu, posedge rst) begin
         if (rst == 1) begin
             // Control Signals
             Signal_Branch_IF_ID <= 0;
@@ -847,7 +820,7 @@ endmodule
 
 module Register_File (
     // Inputs
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,    
     input wire Reg_Write,
     input wire [4:0] rs1,
@@ -874,7 +847,7 @@ module Register_File (
         RD_Data2_ID_EX = Reg_Mem[rs2];
     end
         
-    always @(negedge clk_50MHZ, posedge rst) begin
+    always @(negedge clk_cpu, posedge rst) begin
         if (rst == 1) begin
             for (i = 0; i < 32; i = i + 1)
                 Reg_Mem[i] <= 0;
@@ -1068,7 +1041,7 @@ endmodule
 module ID_EX_reg (
     // Inputs
     // Control Signals
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Flush,            // Pipeline flush
     input wire Signal_Branch_IF_ID,     // Branch
@@ -1129,7 +1102,7 @@ module ID_EX_reg (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(posedge clk_50MHZ, posedge rst) begin
+    always @(posedge clk_cpu, posedge rst) begin
         if (rst == 1) begin
             Signal_Branch_ID_EX <= 0;
             Signal_Jal_ID_EX    <= 0;
@@ -1322,7 +1295,7 @@ endmodule
 module EX_MEM_Reg (
     // Inputs
     // Control Signals
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Jal_ID_EX,
     input wire Signal_Jalr_ID_EX,
@@ -1358,7 +1331,7 @@ module EX_MEM_Reg (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(posedge clk_50MHZ, posedge rst) begin
+    always @(posedge clk_cpu, posedge rst) begin
         if (rst==1) begin
             Signal_Jal_EX_MEM   <= 0;
             Signal_Jalr_EX_MEM  <= 0;
@@ -1412,7 +1385,7 @@ endmodule
 // should poll STATUS before writing the next byte.
 // ================================================================
 module Mapped_IO (
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Mem_Write_EX_MEM,
     input wire Mem_Read_EX_MEM,
@@ -1493,7 +1466,7 @@ module Mapped_IO (
         end
     end
 
-    always @(posedge clk_50MHZ or posedge rst) begin
+    always @(posedge clk_cpu or posedge rst) begin
         if (rst) begin
             cnn_start <= 1'b0;
             cnn_soft_reset <= 1'b0;
@@ -1573,7 +1546,7 @@ module Data_Memory #(
     parameter CNN_B2_FILE  = "cnn_b2.mem",
     parameter CNN_B3_FILE  = "cnn_b3.mem"
 ) (
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire Mem_Write_EX_MEM,
     input wire Mem_Read_EX_MEM,
     input wire [31:0] Mem_Write_Data,
@@ -1665,25 +1638,25 @@ module Data_Memory #(
     end
 
     Byte_TDP_RAM #(.DATA_FILE(DATA_B0_FILE), .CNN_FILE(CNN_B0_FILE)) data_b0 (
-        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[0]), .addra(cpu_word_addr),
+        .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[0]), .addra(cpu_word_addr),
         .dina(cpu_din0), .douta(cpu_dout0), .enb(cnn_port_en), .web(cnn_byte_we[0]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout0)
     );
 
     Byte_TDP_RAM #(.DATA_FILE(DATA_B1_FILE), .CNN_FILE(CNN_B1_FILE)) data_b1 (
-        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[1]), .addra(cpu_word_addr),
+        .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[1]), .addra(cpu_word_addr),
         .dina(cpu_din1), .douta(cpu_dout1), .enb(cnn_port_en), .web(cnn_byte_we[1]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout1)
     );
 
     Byte_TDP_RAM #(.DATA_FILE(DATA_B2_FILE), .CNN_FILE(CNN_B2_FILE)) data_b2 (
-        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[2]), .addra(cpu_word_addr),
+        .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[2]), .addra(cpu_word_addr),
         .dina(cpu_din2), .douta(cpu_dout2), .enb(cnn_port_en), .web(cnn_byte_we[2]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout2)
     );
 
     Byte_TDP_RAM #(.DATA_FILE(DATA_B3_FILE), .CNN_FILE(CNN_B3_FILE)) data_b3 (
-        .clk(clk_50MHZ), .ena(cpu_access), .wea(cpu_byte_we[3]), .addra(cpu_word_addr),
+        .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[3]), .addra(cpu_word_addr),
         .dina(cpu_din3), .douta(cpu_dout3), .enb(cnn_port_en), .web(cnn_byte_we[3]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout3)
     );
@@ -1742,7 +1715,7 @@ endmodule
 module MEM_WB_Reg (
     // Inputs
     // Control Signals
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Jal_EX_MEM,
     input wire Signal_Jalr_EX_MEM,
@@ -1772,7 +1745,7 @@ module MEM_WB_Reg (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(posedge clk_50MHZ, posedge rst) begin
+    always @(posedge clk_cpu, posedge rst) begin
         if (rst==1) begin
             Signal_Jal_MEM_WB   <= 0;
             Signal_Jalr_MEM_WB  <= 0;
@@ -1866,7 +1839,7 @@ endmodule
 
 module Branch_Table (
     // Inputs
-    input wire clk_50MHZ,
+    input wire clk_cpu,
     input wire rst,
     input wire Signal_Branch_ID_EX,
     input wire [1:0] Addr,
@@ -1884,7 +1857,7 @@ module Branch_Table (
     //-------------------------------------------------------------
     // Functionality
     //-------------------------------------------------------------
-    always @(posedge clk_50MHZ) begin
+    always @(posedge clk_cpu) begin
         if (rst == 1) begin
             // Initialize BranchTable during rst
             BranchTable[0] <= 2'b00;
@@ -1966,7 +1939,7 @@ endmodule
 // ================================================================
 /*
 module Eight_Digit_Hex_Display(
-    input clk_50MHZ,
+    input clk_cpu,
     input rst,
     input [27:0] Mem_LED_in,
     input [3:0] predicted_class_LED,
@@ -1980,7 +1953,7 @@ module Eight_Digit_Hex_Display(
     reg [18:0] refresh_counter;
     wire [2:0] LED_activating_counter;
 
-    always @(posedge clk_50MHZ or posedge rst) begin
+    always @(posedge clk_cpu or posedge rst) begin
         if (rst)
             one_second_counter <= 0;
         else begin
@@ -1993,14 +1966,14 @@ module Eight_Digit_Hex_Display(
 
     assign one_second_enable = (one_second_counter == 99999999) ? 1 : 0;
 
-    always @(posedge clk_50MHZ or posedge rst) begin
+    always @(posedge clk_cpu or posedge rst) begin
         if (rst)
             displayed_value <= 0;
         else if (one_second_enable)
             displayed_value <= {predicted_class_LED, Mem_LED_in};
     end
 
-    always @(posedge clk_50MHZ or posedge rst) begin
+    always @(posedge clk_cpu or posedge rst) begin
         if (rst)
             refresh_counter <= 0;
         else
@@ -2142,7 +2115,7 @@ endmodule
 
 
 module cnn_core (
-    input clk_20MHZ,
+    input clk_cnn,
     input rst,
     input cnn_start,
     input cnn_soft_reset,
@@ -2339,7 +2312,7 @@ module cnn_core (
     // the read operations across multiple clock cycles, otherwise 
     // vivado will use too many LUTs to implement the memory.
     // ================================================================
-    always @(posedge clk_20MHZ) begin
+    always @(posedge clk_cnn) begin
         kernel1_dout <= kernel1_rom[kernel1_addr];
         kernel1_bias_dout <= kernel1_bias_rom[kernel1_bias_addr];
         kernel2_dout <= kernel2_rom[kernel2_addr];
@@ -2382,7 +2355,7 @@ module cnn_core (
     // Each WAIT state gives the synchronous ROM/RAM read one clock cycle
     // before the ACCUM state consumes the registered data.
     // ================================================================
-    always @(posedge clk_20MHZ or posedge rst) begin
+    always @(posedge clk_cnn or posedge rst) begin
         if (rst || cnn_soft_reset) begin
             state <= S_IDLE;
             cnn_result <= 0;
