@@ -28,7 +28,8 @@ RVCCC/
 |   |-- uart_rx.v              # UART receiver
 |   `-- output.v               # LED and legacy seven-segment display helpers
 |-- programs/
-|   `-- cnn_mmio_poll.S        # Hand-written MMIO polling program
+|   |-- cnn_mmio_poll.S        # Hand-written MMIO polling program
+|   `-- uart_echo.S            # UART echo test
 |-- testbench/
 |   |-- RVCCC_tb.v             # Integrated CPU + CNN + MMIO + UART testbench
 |   `-- RVCCC_rv32i_tb.v       # RV32I datapath self-test testbench
