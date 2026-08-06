@@ -1,18 +1,20 @@
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from torchvision import datasets, transforms
 
 
-MEM_DIR = "./mem_files"
-CNN_MEM_PATH = os.path.join(MEM_DIR, "cnn.mem")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MEM_DIR = PROJECT_ROOT / "mem_files"
+CNN_MEM_PATH = MEM_DIR / "cnn.mem"
 CNN_LANE_PATHS = [
-    os.path.join(MEM_DIR, f"cnn_b{lane}.mem")
+    MEM_DIR / f"cnn_b{lane}.mem"
     for lane in range(4)
 ]
-TEST_IMAGE_PATH = os.path.join(MEM_DIR, "test_image.png")
+TEST_IMAGE_PATH = MEM_DIR / "test_image.png"
 
 
 def write_byte_mem(path, values):
@@ -34,46 +36,62 @@ def write_cnn_lane_mem(paths, values):
         write_byte_mem(path, lane_values)
 
 
-def main():
-    # Step 1: Load the MNIST test set with the same 32x32 resize used by training.
+def load_test_dataset():
+    """Load the MNIST test set with the same 32x32 resize used by training."""
     transform = transforms.Compose([
         transforms.Resize((32, 32)),
         transforms.ToTensor(),
     ])
-    test_dataset = datasets.MNIST(
-        root="./data",
+    return datasets.MNIST(
+        root=str(PROJECT_ROOT / "data"),
         train=False,
         download=True,
         transform=transform,
     )
 
-    # Step 2: Pick the image index from the command line, defaulting to image 0.
-    img_index = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
+def generate_cnn_mem(img_index=0, mem_path=CNN_MEM_PATH, image_path=TEST_IMAGE_PATH):
+    """Generate cnn.mem and test_image.png for one MNIST test image."""
+    test_dataset = load_test_dataset()
     if img_index < 0 or img_index >= len(test_dataset):
-        print(f"Error: index {img_index} out of range [0, {len(test_dataset) - 1}]")
-        sys.exit(1)
+        raise ValueError(
+            f"index {img_index} out of range [0, {len(test_dataset) - 1}]"
+        )
 
     image, label = test_dataset[img_index]
     print(f"Selected image index: {img_index}, label: {label}")
 
-    # Step 3: Convert the tensor from [0, 1] floats to row-major uint8 pixels.
     img_np = (image.numpy() * 255).astype(np.uint8)
     img_flat = img_np.flatten()
 
-    # Step 4: Write the original byte stream and the four BRAM byte-lane files.
-    os.makedirs(MEM_DIR, exist_ok=True)
-    write_byte_mem(CNN_MEM_PATH, img_flat)
-    write_cnn_lane_mem(CNN_LANE_PATHS, img_flat)
+    mem_path = Path(mem_path)
+    image_path = Path(image_path)
+    os.makedirs(mem_path.parent, exist_ok=True)
+    write_byte_mem(mem_path, img_flat)
 
-    print(f"Written {len(img_flat)} pixels to {CNN_MEM_PATH}")
-    for path in CNN_LANE_PATHS:
-        print(f"Written {len(img_flat) // 4} bytes to {path}")
+    # The UART flow writes the CNN image at runtime, so the BRAM lane init
+    # files are intentionally no longer generated here.
+    # write_cnn_lane_mem(CNN_LANE_PATHS, img_flat)
 
-    # Step 5: Save the selected 32x32 grayscale image for quick visual inspection.
+    print(f"Written {len(img_flat)} pixels to {mem_path}")
+    # for path in CNN_LANE_PATHS:
+    #     print(f"Written {len(img_flat) // 4} bytes to {path}")
+
     img_save = img_np.squeeze(0)
     pil_img = Image.fromarray(img_save, mode="L")
-    pil_img.save(TEST_IMAGE_PATH)
-    print(f"Saved test image to {TEST_IMAGE_PATH}")
+    os.makedirs(image_path.parent, exist_ok=True)
+    pil_img.save(image_path)
+    print(f"Saved test image to {image_path}")
+    return mem_path, label
+
+
+def main():
+    img_index = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    try:
+        generate_cnn_mem(img_index)
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

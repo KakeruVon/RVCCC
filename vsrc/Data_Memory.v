@@ -9,11 +9,7 @@ module Data_Memory #(
     parameter DATA_B0_FILE = "data_b0.mem",
     parameter DATA_B1_FILE = "data_b1.mem",
     parameter DATA_B2_FILE = "data_b2.mem",
-    parameter DATA_B3_FILE = "data_b3.mem",
-    parameter CNN_B0_FILE  = "cnn_b0.mem",
-    parameter CNN_B1_FILE  = "cnn_b1.mem",
-    parameter CNN_B2_FILE  = "cnn_b2.mem",
-    parameter CNN_B3_FILE  = "cnn_b3.mem"
+    parameter DATA_B3_FILE = "data_b3.mem"
 ) (
     input wire clk_cpu,
     input wire Mem_Write_EX_MEM,
@@ -106,25 +102,25 @@ module Data_Memory #(
         endcase
     end
 
-    Byte_TDP_RAM #(.DATA_FILE(DATA_B0_FILE), .CNN_FILE(CNN_B0_FILE)) data_b0 (
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B0_FILE)) data_b0 (
         .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[0]), .addra(cpu_word_addr),
         .dina(cpu_din0), .douta(cpu_dout0), .enb(cnn_port_en), .web(cnn_byte_we[0]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout0)
     );
 
-    Byte_TDP_RAM #(.DATA_FILE(DATA_B1_FILE), .CNN_FILE(CNN_B1_FILE)) data_b1 (
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B1_FILE)) data_b1 (
         .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[1]), .addra(cpu_word_addr),
         .dina(cpu_din1), .douta(cpu_dout1), .enb(cnn_port_en), .web(cnn_byte_we[1]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout1)
     );
 
-    Byte_TDP_RAM #(.DATA_FILE(DATA_B2_FILE), .CNN_FILE(CNN_B2_FILE)) data_b2 (
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B2_FILE)) data_b2 (
         .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[2]), .addra(cpu_word_addr),
         .dina(cpu_din2), .douta(cpu_dout2), .enb(cnn_port_en), .web(cnn_byte_we[2]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout2)
     );
 
-    Byte_TDP_RAM #(.DATA_FILE(DATA_B3_FILE), .CNN_FILE(CNN_B3_FILE)) data_b3 (
+    Byte_TDP_RAM #(.DATA_FILE(DATA_B3_FILE)) data_b3 (
         .clk(clk_cpu), .ena(cpu_access), .wea(cpu_byte_we[3]), .addra(cpu_word_addr),
         .dina(cpu_din3), .douta(cpu_dout3), .enb(cnn_port_en), .web(cnn_byte_we[3]),
         .addrb(cnn_word_addr), .dinb(cnn_mem_write_data), .doutb(cnn_dout3)
@@ -136,8 +132,7 @@ endmodule
 // Byte_TDP_RAM - Vivado-friendly true dual-port RAM template
 // ================================================================
 module Byte_TDP_RAM #(
-    parameter DATA_FILE = "",
-    parameter CNN_FILE = ""
+    parameter DATA_FILE = ""
 ) (
     input wire clk,
     input wire ena,
@@ -153,7 +148,6 @@ module Byte_TDP_RAM #(
 );
     localparam DATA_MEM_WORDS = 1024;
     localparam CPU_INIT_LAST  = 767;
-    localparam CNN_INIT_BASE  = 768;
     (* ram_style = "block" *) reg [7:0] ram [0:DATA_MEM_WORDS-1];
     integer i;
 
@@ -161,7 +155,6 @@ module Byte_TDP_RAM #(
         for (i = 0; i < DATA_MEM_WORDS; i = i + 1)
             ram[i] = 8'h00;
         $readmemh(DATA_FILE, ram, 0, CPU_INIT_LAST);
-        $readmemh(CNN_FILE, ram, CNN_INIT_BASE, DATA_MEM_WORDS - 1);
     end
 
     always @(negedge clk) begin

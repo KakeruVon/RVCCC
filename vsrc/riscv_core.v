@@ -35,6 +35,10 @@ module PC_Module (
     assign Branch_Mispredict = Signal_Branch_ID_EX && (Prediction_ID_EX ^ Outcome);
     assign Jalr_Target_Aligned = {Jalr_Target[31:1], 1'b0};
     
+    initial begin
+        PC = 32'h0;
+    end
+    
     always @(posedge clk_cpu, posedge rst) begin
         if (rst==1) begin
             PC <= 32'h0; // rst
