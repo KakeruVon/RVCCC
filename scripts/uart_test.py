@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Automatically find a serial port and print received bytes as hex and ASCII.
+"""Automatically find a serial port, send cnn.mem, and print received bytes.
 
 Install the only third-party dependency with:
 
@@ -9,6 +9,7 @@ Examples:
 
     python scripts/uart_test.py
     python scripts/uart_test.py --port COM7 --baud 115200
+    python scripts/uart_test.py --mem mem_files/cnn.mem
     python scripts/uart_test.py --list
 """
 
@@ -16,8 +17,13 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from pathlib import Path
 import sys
 import time
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MEM_PATH = PROJECT_ROOT / "mem_files" / "cnn.mem"
 
 
 def load_pyserial():
@@ -112,7 +118,76 @@ def format_ascii(data: bytes) -> str:
     return "".join(result)
 
 
-def receive_loop(serial, port: str, baud: int, timeout: float) -> None:
+def load_mem_bytes(path: Path) -> bytes:
+    values: list[int] = []
+    try:
+        with path.open("r", encoding="utf-8") as mem_file:
+            for line_number, line in enumerate(mem_file, start=1):
+                line = line.split("//", 1)[0].split("#", 1)[0].strip()
+                if not line:
+                    continue
+                for token in line.replace(",", " ").split():
+                    if token.startswith("@"):
+                        continue
+                    try:
+                        value = int(token, 16)
+                    except ValueError as exc:
+                        raise SystemExit(
+                            f"{path} line {line_number}: invalid hex byte {token!r}"
+                        ) from exc
+                    if not 0 <= value <= 0xFF:
+                        raise SystemExit(
+                            f"{path} line {line_number}: value {token!r} is not a byte"
+                        )
+                    values.append(value)
+    except OSError as exc:
+        raise SystemExit(f"Cannot read mem file {path}: {exc}") from exc
+
+    if not values:
+        raise SystemExit(f"{path} does not contain any byte values")
+    return bytes(values)
+
+
+def print_received(data: bytes) -> None:
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    hex_text = " ".join(f"{value:02X}" for value in data)
+    print(
+        f"[{timestamp}] "
+        f"HEX: {hex_text:<47} "
+        f"ASCII: {format_ascii(data)}",
+        flush=True,
+    )
+
+
+def read_available(connection) -> None:
+    data = connection.read(connection.in_waiting or 1)
+    if data:
+        print_received(data)
+
+
+def send_bytes(connection, data: bytes, delay: float, label: str) -> None:
+    print(f"Sending {len(data)} bytes from {label}...")
+    for index, value in enumerate(data, start=1):
+        written = connection.write(bytes((value,)))
+        if written != 1:
+            raise SystemExit(f"Serial write failed at byte {index}: wrote {written}")
+        if delay > 0:
+            time.sleep(delay)
+        if connection.in_waiting:
+            read_available(connection)
+    connection.flush()
+    print("Send complete. Waiting for received data. Press Ctrl+C to stop.")
+
+
+def receive_loop(
+    serial,
+    port: str,
+    baud: int,
+    timeout: float,
+    mem_path: Path,
+    tx_delay: float,
+) -> None:
+    tx_data = load_mem_bytes(mem_path)
     try:
         with serial.Serial(
             port=port,
@@ -123,19 +198,9 @@ def receive_loop(serial, port: str, baud: int, timeout: float) -> None:
             timeout=timeout,
         ) as connection:
             print(f"Connected to {port} at {baud} baud.")
-            print("Waiting for data. Press Ctrl+C to stop.")
+            send_bytes(connection, tx_data, tx_delay, str(mem_path))
             while True:
-                data = connection.read(connection.in_waiting or 1)
-                if not data:
-                    continue
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                hex_text = " ".join(f"{value:02X}" for value in data)
-                print(
-                    f"[{timestamp}] "
-                    f"HEX: {hex_text:<47} "
-                    f"ASCII: {format_ascii(data)}",
-                    flush=True,
-                )
+                read_available(connection)
     except KeyboardInterrupt:
         print("\nStopped.")
     except serial.SerialException as exc:
@@ -144,7 +209,7 @@ def receive_loop(serial, port: str, baud: int, timeout: float) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find a serial port and print received bytes as hex and ASCII."
+        description="Find a serial port, send cnn.mem bytes, and print received bytes."
     )
     parser.add_argument(
         "--port",
@@ -163,6 +228,18 @@ def parse_args() -> argparse.Namespace:
         help="serial read timeout in seconds, default: 1.0",
     )
     parser.add_argument(
+        "--mem",
+        type=Path,
+        default=DEFAULT_MEM_PATH,
+        help=f".mem file to send byte-by-byte, default: {DEFAULT_MEM_PATH}",
+    )
+    parser.add_argument(
+        "--tx-delay",
+        type=float,
+        default=0.0,
+        help="delay between transmitted bytes in seconds, default: 0.0",
+    )
+    parser.add_argument(
         "--list",
         action="store_true",
         dest="list_only",
@@ -177,6 +254,8 @@ def main() -> int:
         raise SystemExit("--baud must be positive")
     if args.timeout < 0:
         raise SystemExit("--timeout must be non-negative")
+    if args.tx_delay < 0:
+        raise SystemExit("--tx-delay must be non-negative")
 
     serial, list_ports = load_pyserial()
     ports = find_ports(list_ports)
@@ -186,7 +265,7 @@ def main() -> int:
         return 0
 
     port = choose_port(ports, args.port)
-    receive_loop(serial, port, args.baud, args.timeout)
+    receive_loop(serial, port, args.baud, args.timeout, args.mem, args.tx_delay)
     return 0
 
 
