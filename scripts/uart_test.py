@@ -12,20 +12,28 @@ Examples:
     python scripts/uart_test.py --mem mem_files/cnn.mem
     python scripts/uart_test.py --image-index 64
     python scripts/uart_test.py --image-index 64 65 66
+    python scripts/uart_test.py --batch 100
     python scripts/uart_test.py --list
 """
 
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
 from datetime import datetime
+import io
+import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MEM_PATH = PROJECT_ROOT / "mem_files" / "cnn.mem"
+DEFAULT_PREVIEW_PATH = (
+    Path(tempfile.gettempdir()) / f"rvccc_uart_test_image_{os.getpid()}.png"
+)
 
 
 def load_pyserial():
@@ -102,7 +110,7 @@ def print_ports(ports) -> None:
         print(f"  {index}. {info.device}: {port_label(info)}")
 
 
-def choose_port(ports, requested: str | None) -> str:
+def choose_port(ports, requested: str | None, quiet: bool = False) -> str:
     if requested:
         return requested
     if not ports:
@@ -111,8 +119,9 @@ def choose_port(ports, requested: str | None) -> str:
         )
 
     selected = ports[0]
-    print(f"Automatically selected {selected.device}: {port_label(selected)}")
-    if len(ports) > 1:
+    if not quiet:
+        print(f"Automatically selected {selected.device}: {port_label(selected)}")
+    if len(ports) > 1 and not quiet:
         print("Use --port to select a different port.")
     return selected.device
 
@@ -131,6 +140,13 @@ def format_ascii(data: bytes) -> str:
         else:
             result.append(f"\\x{value:02x}")
     return "".join(result)
+
+
+def parse_prediction(data: bytes) -> int | None:
+    for value in data:
+        if ord("0") <= value <= ord("9"):
+            return value - ord("0")
+    return None
 
 
 def load_mem_bytes(path: Path) -> bytes:
@@ -174,14 +190,14 @@ def print_received(data: bytes) -> None:
     )
 
 
-def read_available(connection) -> bytes:
+def read_available(connection, verbose: bool = True) -> bytes:
     data = connection.read(connection.in_waiting or 1)
-    if data:
+    if data and verbose:
         print_received(data)
     return data
 
 
-def read_result_line(connection, timeout: float) -> bytes:
+def read_result_line(connection, timeout: float, verbose: bool = True) -> bytes:
     deadline = time.monotonic() + timeout
     received = bytearray()
     while time.monotonic() < deadline:
@@ -195,24 +211,33 @@ def read_result_line(connection, timeout: float) -> bytes:
         if not data:
             continue
         received.extend(data)
-        print_received(data)
+        if verbose:
+            print_received(data)
         if b"\n" in received:
             break
     return bytes(received)
 
 
-def send_bytes(connection, data: bytes, delay: float, label: str) -> None:
-    print(f"Sending {len(data)} bytes from {label}...")
+def send_bytes(
+    connection,
+    data: bytes,
+    delay: float,
+    label: str,
+    verbose: bool = True,
+) -> None:
+    if verbose:
+        print(f"Sending {len(data)} bytes from {label}...")
     for index, value in enumerate(data, start=1):
         written = connection.write(bytes((value,)))
         if written != 1:
             raise SystemExit(f"Serial write failed at byte {index}: wrote {written}")
         if delay > 0:
             time.sleep(delay)
-        if connection.in_waiting:
+        if verbose and connection.in_waiting:
             read_available(connection)
     connection.flush()
-    print("Send complete.")
+    if verbose:
+        print("Send complete.")
 
 
 def send_existing_mem(connection, mem_path: Path, tx_delay: float) -> None:
@@ -223,36 +248,105 @@ def send_existing_mem(connection, mem_path: Path, tx_delay: float) -> None:
         read_available(connection)
 
 
+def generate_image_mem(
+    generate_cnn_mem,
+    img_index: int,
+    mem_path: Path,
+    quiet: bool,
+) -> tuple[Path, int]:
+    try:
+        if quiet:
+            with redirect_stdout(io.StringIO()):
+                generated_path, label = generate_cnn_mem(
+                    img_index,
+                    mem_path=mem_path,
+                    image_path=DEFAULT_PREVIEW_PATH,
+                )
+        else:
+            generated_path, label = generate_cnn_mem(
+                img_index,
+                mem_path=mem_path,
+                image_path=DEFAULT_PREVIEW_PATH,
+            )
+    except ValueError as exc:
+        raise SystemExit(f"Cannot generate image {img_index}: {exc}") from exc
+    return Path(generated_path), int(label)
+
+
+def print_result_check(img_index: int, label: int, result: bytes) -> bool:
+    prediction = parse_prediction(result)
+    if prediction is None:
+        print(
+            f"Result for index {img_index} label {label}: "
+            f"ASCII: {format_ascii(result)} -> INVALID"
+        )
+        return False
+
+    is_correct = prediction == label
+    status = "CORRECT" if is_correct else "WRONG"
+    print(
+        f"Result for index {img_index} label {label}: "
+        f"predicted {prediction} -> {status}"
+    )
+    return is_correct
+
+
 def send_generated_images(
     connection,
     image_indices: list[int],
     mem_path: Path,
     tx_delay: float,
     result_timeout: float,
+    batch_mode: bool = False,
 ) -> None:
     generate_cnn_mem = load_testmem_generator()
+    total = 0
+    correct = 0
+    timed_out = 0
+    invalid = 0
+
     for img_index in image_indices:
-        try:
-            generated_path, label = generate_cnn_mem(img_index, mem_path=mem_path)
-        except ValueError as exc:
-            raise SystemExit(f"Cannot generate image {img_index}: {exc}") from exc
+        generated_path, label = generate_image_mem(
+            generate_cnn_mem,
+            img_index,
+            mem_path,
+            quiet=batch_mode,
+        )
 
         tx_data = load_mem_bytes(generated_path)
         label_text = f"{generated_path} (MNIST index {img_index}, label {label})"
-        send_bytes(connection, tx_data, tx_delay, label_text)
+        send_bytes(connection, tx_data, tx_delay, label_text, verbose=not batch_mode)
 
-        result = read_result_line(connection, result_timeout)
+        result = read_result_line(connection, result_timeout, verbose=not batch_mode)
         if result:
-            print(
-                f"Result for index {img_index} label {label}: "
-                f"ASCII: {format_ascii(result)}"
-            )
+            total += 1
+            prediction = parse_prediction(result)
+            invalid += int(prediction is None)
+            is_correct = prediction == label
+            correct += int(is_correct)
+            if not batch_mode:
+                print_result_check(img_index, label, result)
         else:
+            timed_out += 1
             print(f"No result received for index {img_index} within {result_timeout}s")
 
-    print("Batch send complete. Waiting for any further received data. Press Ctrl+C to stop.")
-    while True:
-        read_available(connection)
+    if batch_mode:
+        attempted = len(image_indices)
+        received_accuracy = (correct / total * 100.0) if total else 0.0
+        overall_accuracy = (correct / attempted * 100.0) if attempted else 0.0
+        print("Batch test complete.")
+        print(
+            f"Accuracy: {correct}/{attempted} = {overall_accuracy:.2f}% "
+            f"(received: {total}, timeouts: {timed_out}, invalid: {invalid}, "
+            f"received accuracy: {received_accuracy:.2f}%)"
+        )
+    else:
+        print(
+            "Batch send complete. Waiting for any further received data. "
+            "Press Ctrl+C to stop."
+        )
+        while True:
+            read_available(connection)
 
 
 def receive_loop(
@@ -264,6 +358,7 @@ def receive_loop(
     tx_delay: float,
     image_indices: list[int] | None,
     result_timeout: float,
+    batch_mode: bool,
 ) -> None:
     try:
         with serial.Serial(
@@ -282,6 +377,7 @@ def receive_loop(
                     mem_path,
                     tx_delay,
                     result_timeout,
+                    batch_mode,
                 )
             else:
                 send_existing_mem(connection, mem_path, tx_delay)
@@ -324,6 +420,12 @@ def parse_args() -> argparse.Namespace:
         help="generate cnn.mem from one or more MNIST test indices before sending",
     )
     parser.add_argument(
+        "--batch",
+        type=int,
+        metavar="COUNT",
+        help="batch test MNIST indices 0..COUNT-1 and print accuracy summary",
+    )
+    parser.add_argument(
         "--result-timeout",
         type=float,
         default=5.0,
@@ -354,6 +456,10 @@ def main() -> int:
         raise SystemExit("--tx-delay must be non-negative")
     if args.result_timeout <= 0:
         raise SystemExit("--result-timeout must be positive")
+    if args.batch is not None and args.batch <= 0:
+        raise SystemExit("--batch must be positive")
+    if args.batch is not None and args.image_index:
+        raise SystemExit("--batch cannot be used with --image-index")
 
     serial, list_ports = load_pyserial()
     ports = find_ports(list_ports)
@@ -362,7 +468,10 @@ def main() -> int:
         print_ports(ports)
         return 0
 
-    port = choose_port(ports, args.port)
+    batch_mode = args.batch is not None
+    image_indices = list(range(args.batch)) if batch_mode else args.image_index
+
+    port = choose_port(ports, args.port, quiet=batch_mode)
     receive_loop(
         serial,
         port,
@@ -370,8 +479,9 @@ def main() -> int:
         args.timeout,
         args.mem,
         args.tx_delay,
-        args.image_index,
+        image_indices,
         args.result_timeout,
+        batch_mode,
     )
     return 0
 
