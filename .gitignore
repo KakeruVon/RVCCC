@@ -20,5 +20,4 @@ vsim.wlf
 build/
 
 # Other files that should not be tracked by Git
-doc/
-notes.txt
+files/
